@@ -4,7 +4,6 @@ import { usePathname, useRouter } from "expo-router";
 import { getIsTauri } from "@/constants/layout";
 import { useSessionStore } from "@/stores/session-store";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
-import { parseSidebarAgentKey } from "@/utils/sidebar-shortcuts";
 import { setCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
 import {
   checkoutStatusQueryKey,
@@ -17,8 +16,9 @@ import {
   resolveNewAgentWorkingDir,
 } from "@/utils/new-agent-routing";
 import {
-  buildHostAgentDetailRoute,
+  buildHostWorkspaceRoute,
   parseHostAgentRouteFromPathname,
+  parseHostWorkspaceRouteFromPathname,
   parseServerIdFromPathname,
 } from "@/utils/host-routes";
 import {
@@ -70,20 +70,16 @@ export function useKeyboardShortcuts({
 
     const navigateToSidebarShortcut = (digit: number): boolean => {
       const state = useKeyboardShortcutsStore.getState();
-      const targetKey = state.sidebarShortcutAgentKeys[digit - 1] ?? null;
-      if (!targetKey) {
+      const target = state.sidebarShortcutWorkspaceTargets[digit - 1] ?? null;
+      if (!target) {
         return false;
       }
 
-      const parsed = parseSidebarAgentKey(targetKey);
-      if (!parsed) {
-        return false;
-      }
-      const { serverId, agentId } = parsed;
-
-      const shouldReplace = Boolean(parseHostAgentRouteFromPathname(pathname));
+      const shouldReplace =
+        Boolean(parseHostWorkspaceRouteFromPathname(pathname)) ||
+        Boolean(parseHostAgentRouteFromPathname(pathname));
       const navigate = shouldReplace ? router.replace : router.push;
-      navigate(buildHostAgentDetailRoute(serverId, agentId) as any);
+      navigate(buildHostWorkspaceRoute(target.serverId, target.workspaceId) as any);
       return true;
     };
 

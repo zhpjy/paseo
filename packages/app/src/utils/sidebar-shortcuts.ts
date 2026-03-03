@@ -1,46 +1,77 @@
-export interface SidebarShortcutSection {
-  projectKey: string;
-  agents: Array<{ serverId: string; id: string }>;
+import type {
+  SidebarProjectEntry,
+  SidebarWorkspaceEntry,
+} from '@/hooks/use-sidebar-agents-list'
+
+export interface SidebarShortcutWorkspaceTarget {
+  serverId: string
+  workspaceId: string
 }
 
-export function parseSidebarAgentKey(
-  key: string
-): { serverId: string; agentId: string } | null {
-  const sep = key.indexOf(":");
-  if (sep === -1) {
-    return null;
-  }
-  const serverId = key.slice(0, sep);
-  const agentId = key.slice(sep + 1);
-  if (!serverId || !agentId) {
-    return null;
-  }
-  return { serverId, agentId };
-}
-
-export function deriveSidebarShortcutAgentKeys(
-  sections: SidebarShortcutSection[],
-  collapsedProjectKeys: ReadonlySet<string>,
-  limit = 9
-): string[] {
-  const keys: string[] = [];
-  const max = Math.max(0, Math.floor(limit));
-  if (max === 0) {
-    return keys;
-  }
-
-  for (const section of sections) {
-    if (collapsedProjectKeys.has(section.projectKey)) {
-      continue;
+export type SidebarWorkspaceTreeRow =
+  | {
+      kind: 'project'
+      rowKey: string
+      project: SidebarProjectEntry
+      displayName: string
     }
-    for (const agent of section.agents) {
-      keys.push(`${agent.serverId}:${agent.id}`);
-      if (keys.length >= max) {
-        return keys;
+  | {
+      kind: 'workspace'
+      rowKey: string
+      projectKey: string
+      workspace: SidebarWorkspaceEntry
+      shortcutNumber: number | null
+    }
+
+export interface SidebarWorkspaceViewModel {
+  rows: SidebarWorkspaceTreeRow[]
+  shortcutTargets: SidebarShortcutWorkspaceTarget[]
+  shortcutIndexByWorkspaceKey: Map<string, number>
+}
+
+export function buildSidebarWorkspaceViewModel(input: {
+  projects: SidebarProjectEntry[]
+  collapsedProjectKeys: ReadonlySet<string>
+  getProjectDisplayName: (project: SidebarProjectEntry) => string
+  shortcutLimit?: number
+}): SidebarWorkspaceViewModel {
+  const maxShortcuts = Math.max(0, Math.floor(input.shortcutLimit ?? 9))
+  const rows: SidebarWorkspaceTreeRow[] = []
+  const shortcutTargets: SidebarShortcutWorkspaceTarget[] = []
+  const shortcutIndexByWorkspaceKey = new Map<string, number>()
+
+  for (const project of input.projects) {
+    rows.push({
+      kind: 'project',
+      rowKey: `project:${project.projectKey}`,
+      project,
+      displayName: input.getProjectDisplayName(project),
+    })
+
+    if (input.collapsedProjectKeys.has(project.projectKey)) {
+      continue
+    }
+
+    for (const workspace of project.workspaces) {
+      const shortcutNumber =
+        shortcutTargets.length < maxShortcuts ? shortcutTargets.length + 1 : null
+      if (shortcutNumber !== null) {
+        shortcutTargets.push({
+          serverId: workspace.serverId,
+          workspaceId: workspace.cwd,
+        })
+        shortcutIndexByWorkspaceKey.set(workspace.workspaceKey, shortcutNumber)
       }
+
+      rows.push({
+        kind: 'workspace',
+        rowKey: `workspace:${project.projectKey}:${workspace.workspaceKey}`,
+        projectKey: project.projectKey,
+        workspace,
+        shortcutNumber,
+      })
     }
   }
 
-  return keys;
+  return { rows, shortcutTargets, shortcutIndexByWorkspaceKey }
 }
-

@@ -1032,7 +1032,6 @@ function DraftAgentScreenContent({
             next.set(agentId, normalizeAgentSnapshot(result, selectedServerId))
             return next
           })
-          void createAgentClient.refreshAgent(agentId).catch(() => undefined)
           router.replace(buildHostAgentDetailRoute(selectedServerId, agentId) as any)
           return
         }

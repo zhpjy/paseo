@@ -200,7 +200,7 @@ describe("keyboard-shortcut help sections", () => {
     });
 
     expect(findRow(sections, "new-agent")?.keys).toEqual(["mod", "alt", "N"]);
-    expect(findRow(sections, "quick-open-agent")?.keys).toEqual([
+    expect(findRow(sections, "quick-open-workspace")?.keys).toEqual([
       "alt",
       "1-9",
     ]);
@@ -213,7 +213,7 @@ describe("keyboard-shortcut help sections", () => {
     });
 
     expect(findRow(sections, "new-agent")?.keys).toEqual(["mod", "N"]);
-    expect(findRow(sections, "quick-open-agent")?.keys).toEqual([
+    expect(findRow(sections, "quick-open-workspace")?.keys).toEqual([
       "mod",
       "1-9",
     ]);

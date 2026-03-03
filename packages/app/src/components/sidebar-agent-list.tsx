@@ -15,6 +15,7 @@ import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react-native'
 import { DraggableList, type DraggableRenderItemInfo } from './draggable-list'
 import { getHostRuntimeStore, isHostRuntimeConnected } from '@/runtime/host-runtime'
+import { getIsTauri } from '@/constants/layout'
 import { projectIconQueryKey } from '@/hooks/use-project-icon-query'
 import {
   buildHostWorkspaceRoute,
@@ -28,6 +29,7 @@ import {
 } from '@/hooks/use-sidebar-agents-list'
 import { useSidebarOrderStore } from '@/stores/sidebar-order-store'
 import { useCheckoutGitActionsStore } from '@/stores/checkout-git-actions-store'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { formatTimeAgo } from '@/utils/time'
 import type { SidebarStateBucket } from '@/utils/sidebar-agent-state'
 import { confirmDialog } from '@/utils/confirm-dialog'
@@ -38,20 +40,11 @@ import {
   ContextMenuTrigger,
   useContextMenu,
 } from '@/components/ui/context-menu'
-
-type SidebarTreeRow =
-  | {
-      kind: 'project'
-      rowKey: string
-      project: SidebarProjectEntry
-      displayName: string
-    }
-  | {
-      kind: 'workspace'
-      rowKey: string
-      projectKey: string
-      workspace: SidebarWorkspaceEntry
-    }
+import { deriveProjectDisplayName } from '@/utils/agent-grouping'
+import {
+  buildSidebarWorkspaceViewModel,
+  type SidebarWorkspaceTreeRow,
+} from '@/utils/sidebar-shortcuts'
 
 function toProjectIconDataUri(icon: { mimeType: string; data: string } | null): string | null {
   if (!icon) {
@@ -84,36 +77,10 @@ interface ProjectRowProps {
 interface WorkspaceRowProps {
   workspace: SidebarWorkspaceEntry
   selected: boolean
+  shortcutNumber: number | null
+  showShortcutBadge: boolean
   onPress: () => void
   drag: () => void
-}
-
-function deriveProjectDisplayName(input: { projectKey: string; projectName: string }): string {
-  const githubPrefix = 'remote:github.com/'
-  if (input.projectKey.startsWith(githubPrefix)) {
-    return input.projectKey.slice(githubPrefix.length)
-  }
-
-  if (input.projectKey.startsWith('remote:')) {
-    const withoutPrefix = input.projectKey.slice('remote:'.length)
-    const slashIdx = withoutPrefix.indexOf('/')
-    if (slashIdx >= 0) {
-      const remotePath = withoutPrefix.slice(slashIdx + 1).trim()
-      if (remotePath.length > 0) {
-        return remotePath
-      }
-    }
-    return withoutPrefix
-  }
-
-  const trimmedProjectName = input.projectName.trim()
-  if (trimmedProjectName.length > 0) {
-    return trimmedProjectName
-  }
-
-  const normalized = input.projectKey.replace(/\\/g, '/').replace(/\/+$/, '')
-  const segments = normalized.split('/').filter(Boolean)
-  return segments[segments.length - 1] ?? input.projectKey
 }
 
 function resolveWorkspaceBranchLabel(workspace: SidebarWorkspaceEntry): string {
@@ -225,7 +192,14 @@ function ProjectRow({
   )
 }
 
-function WorkspaceRow({ workspace, selected, onPress, drag }: WorkspaceRowProps) {
+function WorkspaceRow({
+  workspace,
+  selected,
+  shortcutNumber,
+  showShortcutBadge,
+  onPress,
+  drag,
+}: WorkspaceRowProps) {
   const { theme } = useUnistyles()
   const createdAtLabel = resolveWorkspaceCreatedAtLabel(workspace)
 
@@ -412,11 +386,18 @@ function WorkspaceRow({ workspace, selected, onPress, drag }: WorkspaceRowProps)
           {resolveWorkspaceBranchLabel(workspace)}
         </Text>
       </View>
-      {createdAtLabel ? (
-        <Text style={styles.workspaceCreatedAtText} numberOfLines={1}>
-          {createdAtLabel}
-        </Text>
-      ) : null}
+      <View style={styles.workspaceRowRight}>
+        {createdAtLabel ? (
+          <Text style={styles.workspaceCreatedAtText} numberOfLines={1}>
+            {createdAtLabel}
+          </Text>
+        ) : null}
+        {showShortcutBadge && shortcutNumber !== null ? (
+          <View style={styles.shortcutBadge}>
+            <Text style={styles.shortcutBadgeText}>{shortcutNumber}</Text>
+          </View>
+        ) : null}
+      </View>
     </ContextMenuTrigger>
   )
 
@@ -453,17 +434,28 @@ function WorkspaceRow({ workspace, selected, onPress, drag }: WorkspaceRowProps)
 function WorkspaceRowWithMenu({
   workspace,
   selected,
+  shortcutNumber,
+  showShortcutBadge,
   onPress,
   drag,
 }: {
   workspace: SidebarWorkspaceEntry
   selected: boolean
+  shortcutNumber: number | null
+  showShortcutBadge: boolean
   onPress: () => void
   drag: () => void
 }) {
   return (
     <ContextMenu>
-      <WorkspaceRow workspace={workspace} selected={selected} onPress={onPress} drag={drag} />
+      <WorkspaceRow
+        workspace={workspace}
+        selected={selected}
+        shortcutNumber={shortcutNumber}
+        showShortcutBadge={showShortcutBadge}
+        onPress={onPress}
+        drag={drag}
+      />
     </ContextMenu>
   )
 }
@@ -507,6 +499,13 @@ export function SidebarAgentList({
   const shouldReplaceWorkspaceNavigation = segments[0] === 'h'
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(new Set())
   const [canonicalResyncNonce, setCanonicalResyncNonce] = useState(0)
+  const isTauri = getIsTauri()
+  const altDown = useKeyboardShortcutsStore((state) => state.altDown)
+  const cmdOrCtrlDown = useKeyboardShortcutsStore((state) => state.cmdOrCtrlDown)
+  const setSidebarShortcutWorkspaceTargets = useKeyboardShortcutsStore(
+    (state) => state.setSidebarShortcutWorkspaceTargets
+  )
+  const showShortcutBadges = altDown || (isTauri && cmdOrCtrlDown)
 
   const getProjectOrder = useSidebarOrderStore((state) => state.getProjectOrder)
   const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder)
@@ -610,34 +609,29 @@ export function SidebarAgentList({
     return byProject
   }, [projectIconQueries, projectIconRequests, projects, serverId])
 
-  const rows = useMemo(() => {
-    const next: SidebarTreeRow[] = []
-    for (const project of projects) {
-      next.push({
-        kind: 'project',
-        rowKey: `project:${project.projectKey}`,
-        project,
-        displayName: deriveProjectDisplayName({
-          projectKey: project.projectKey,
-          projectName: project.projectName,
-        }),
-      })
+  const viewModel = useMemo(
+    () =>
+      buildSidebarWorkspaceViewModel({
+        projects,
+        collapsedProjectKeys,
+        getProjectDisplayName: (project) =>
+          deriveProjectDisplayName({
+            projectKey: project.projectKey,
+            projectName: project.projectName,
+          }),
+      }),
+    [canonicalResyncNonce, collapsedProjectKeys, projects]
+  )
 
-      if (collapsedProjectKeys.has(project.projectKey)) {
-        continue
-      }
+  useEffect(() => {
+    setSidebarShortcutWorkspaceTargets(viewModel.shortcutTargets)
+  }, [setSidebarShortcutWorkspaceTargets, viewModel.shortcutTargets])
 
-      for (const workspace of project.workspaces) {
-        next.push({
-          kind: 'workspace',
-          rowKey: `workspace:${project.projectKey}:${workspace.workspaceKey}`,
-          projectKey: project.projectKey,
-          workspace,
-        })
-      }
+  useEffect(() => {
+    return () => {
+      setSidebarShortcutWorkspaceTargets([])
     }
-    return next
-  }, [canonicalResyncNonce, collapsedProjectKeys, projects])
+  }, [setSidebarShortcutWorkspaceTargets])
 
   const toggleProjectCollapsed = useCallback((projectKey: string) => {
     setCollapsedProjectKeys((prev) => {
@@ -652,7 +646,7 @@ export function SidebarAgentList({
   }, [])
 
   const renderRow = useCallback(
-    ({ item, drag }: DraggableRenderItemInfo<SidebarTreeRow>) => {
+    ({ item, drag }: DraggableRenderItemInfo<SidebarWorkspaceTreeRow>) => {
       if (item.kind === 'project') {
         return (
           <ProjectRow
@@ -677,6 +671,8 @@ export function SidebarAgentList({
         <WorkspaceRowWithMenu
           workspace={item.workspace}
           selected={isSelected}
+          shortcutNumber={item.shortcutNumber}
+          showShortcutBadge={showShortcutBadges}
           onPress={() => {
             if (!serverId) {
               return
@@ -691,19 +687,19 @@ export function SidebarAgentList({
     [
       activeWorkspaceSelection,
       collapsedProjectKeys,
-      isMobile,
       onWorkspacePress,
       projectIconByProjectKey,
       serverId,
+      showShortcutBadges,
       shouldReplaceWorkspaceNavigation,
       toggleProjectCollapsed,
     ]
   )
 
-  const keyExtractor = useCallback((entry: SidebarTreeRow) => entry.rowKey, [])
+  const keyExtractor = useCallback((entry: SidebarWorkspaceTreeRow) => entry.rowKey, [])
 
   const handleDragEnd = useCallback(
-    (reorderedRows: SidebarTreeRow[]) => {
+    (reorderedRows: SidebarWorkspaceTreeRow[]) => {
       if (!serverId) {
         return
       }
@@ -711,7 +707,8 @@ export function SidebarAgentList({
       let didPersistOrderChange = false
       const reorderedProjectKeys = reorderedRows
         .filter(
-          (row): row is Extract<SidebarTreeRow, { kind: 'project' }> => row.kind === 'project'
+          (row): row is Extract<SidebarWorkspaceTreeRow, { kind: 'project' }> =>
+            row.kind === 'project'
         )
         .map((row) => row.project.projectKey)
 
@@ -776,7 +773,7 @@ export function SidebarAgentList({
   return (
     <View style={styles.container}>
       <DraggableList
-        data={rows}
+        data={viewModel.rows}
         style={styles.list}
         contentContainerStyle={styles.listContent}
         testID="sidebar-project-workspace-list-scroll"
@@ -879,6 +876,12 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
   },
+  workspaceRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[2],
+    flexShrink: 0,
+  },
   workspaceRowHovered: {
     backgroundColor: theme.colors.surface1,
   },
@@ -912,5 +915,22 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
     flexShrink: 0,
+  },
+  shortcutBadge: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: theme.spacing[1],
+    borderRadius: theme.borderRadius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shortcutBadgeText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    fontWeight: '600',
+    lineHeight: 14,
   },
 }))

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveRemoteProjectKey, groupAgents } from "./agent-grouping";
+import {
+  deriveProjectDisplayName,
+  deriveRemoteProjectKey,
+  groupAgents,
+} from "./agent-grouping";
 import type { AggregatedAgent } from "@/hooks/use-aggregated-agents";
 
 function makeAgent(overrides: Partial<AggregatedAgent> = {}): AggregatedAgent {
@@ -32,6 +36,35 @@ describe("deriveRemoteProjectKey", () => {
     expect(deriveRemoteProjectKey(gitlab)).toBe(
       "remote:gitlab.example.com/group/repo"
     );
+  });
+});
+
+describe("deriveProjectDisplayName", () => {
+  it("shows owner/repo for GitHub remote keys", () => {
+    expect(
+      deriveProjectDisplayName({
+        projectKey: "remote:github.com/getpaseo/paseo",
+        projectName: "paseo",
+      })
+    ).toBe("getpaseo/paseo");
+  });
+
+  it("shows remote path for non-GitHub remote keys", () => {
+    expect(
+      deriveProjectDisplayName({
+        projectKey: "remote:gitlab.example.com/group/repo",
+        projectName: "repo",
+      })
+    ).toBe("group/repo");
+  });
+
+  it("falls back to projectName for local keys", () => {
+    expect(
+      deriveProjectDisplayName({
+        projectKey: "/Users/me/dev/paseo",
+        projectName: "paseo",
+      })
+    ).toBe("paseo");
   });
 });
 

@@ -58,6 +58,7 @@ import {
   type SortOption,
 } from "@/stores/panel-store";
 import { formatTimeAgo } from "@/utils/time";
+import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
 import {
   WebDesktopScrollbarOverlay,
   useWebDesktopScrollbarMetrics,
@@ -258,9 +259,17 @@ export function FileExplorerPane({
     [handleOpenFile, handleToggleDirectory]
   );
 
-  const handleCopyPath = useCallback(async (path: string) => {
-    await Clipboard.setStringAsync(path);
-  }, []);
+  const handleCopyPath = useCallback(
+    async (path: string) => {
+      await Clipboard.setStringAsync(
+        buildAbsoluteExplorerPath({
+          workspaceRoot: normalizedWorkspaceRoot,
+          entryPath: path,
+        })
+      );
+    },
+    [normalizedWorkspaceRoot]
+  );
 
   const startDownload = useDownloadStore((state) => state.startDownload);
   const handleDownloadEntry = useCallback(

@@ -157,6 +157,44 @@ export function deriveProjectName(projectKey: string): string {
 }
 
 /**
+ * Formats a project name for display in the UI.
+ *
+ * - GitHub remotes show owner/repo
+ * - Other remotes show the remote path when possible
+ * - Local projects prefer the provided projectName, then fallback to cwd tail
+ */
+export function deriveProjectDisplayName(input: {
+  projectKey: string;
+  projectName: string;
+}): string {
+  const githubPrefix = "remote:github.com/";
+  if (input.projectKey.startsWith(githubPrefix)) {
+    return input.projectKey.slice(githubPrefix.length);
+  }
+
+  if (input.projectKey.startsWith("remote:")) {
+    const withoutPrefix = input.projectKey.slice("remote:".length);
+    const slashIdx = withoutPrefix.indexOf("/");
+    if (slashIdx >= 0) {
+      const remotePath = withoutPrefix.slice(slashIdx + 1).trim();
+      if (remotePath.length > 0) {
+        return remotePath;
+      }
+    }
+    return withoutPrefix;
+  }
+
+  const trimmedProjectName = input.projectName.trim();
+  if (trimmedProjectName.length > 0) {
+    return trimmedProjectName;
+  }
+
+  const normalized = input.projectKey.replace(/\\/g, "/").replace(/\/+$/, "");
+  const segments = normalized.split("/").filter(Boolean);
+  return segments[segments.length - 1] ?? input.projectKey;
+}
+
+/**
  * Determines the date group label for an agent based on lastActivityAt.
  */
 export function deriveDateGroup(lastActivityAt: Date): string {

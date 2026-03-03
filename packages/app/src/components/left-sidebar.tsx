@@ -18,7 +18,6 @@ import { SidebarAgentListSkeleton } from './sidebar-agent-list-skeleton'
 import { useSidebarAgentsList } from '@/hooks/use-sidebar-agents-list'
 import { useSidebarAnimation } from '@/contexts/sidebar-animation-context'
 import { useTauriDragHandlers, useTrafficLightPadding } from '@/utils/tauri-window'
-import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { Combobox } from '@/components/ui/combobox'
 import { useDaemonRegistry } from '@/contexts/daemon-registry-context'
 import { getHostRuntimeStore } from '@/runtime/host-runtime'
@@ -145,13 +144,6 @@ export function LeftSidebar({ selectedAgentId }: LeftSidebarProps) {
       setIsManualRefresh(false)
     }
   }, [isRevalidating, isManualRefresh])
-
-  const setSidebarShortcutAgentKeys = useKeyboardShortcutsStore(
-    (s) => s.setSidebarShortcutAgentKeys
-  )
-  useEffect(() => {
-    setSidebarShortcutAgentKeys([])
-  }, [setSidebarShortcutAgentKeys])
 
   const handleClose = useCallback(() => {
     closeToAgent()

@@ -318,9 +318,9 @@ const SHORTCUT_BINDINGS: readonly KeyboardShortcutBinding[] = [
     },
     when: (context) => !context.commandCenterOpen,
     help: {
-      id: "quick-open-agent",
+      id: "quick-open-workspace",
       section: "global",
-      label: "Open sidebar agent shortcut",
+      label: "Open sidebar workspace shortcut",
       keys: ["alt", "1-9"],
       when: (context) => !context.isTauri,
     },
@@ -335,9 +335,9 @@ const SHORTCUT_BINDINGS: readonly KeyboardShortcutBinding[] = [
     },
     when: (context) => context.isTauri && !context.commandCenterOpen,
     help: {
-      id: "quick-open-agent",
+      id: "quick-open-workspace",
       section: "global",
-      label: "Open sidebar agent shortcut",
+      label: "Open sidebar workspace shortcut",
       keys: ["mod", "1-9"],
       when: (context) => context.isTauri,
     },

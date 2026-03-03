@@ -48,7 +48,7 @@ import TerminalEmulator from "./terminal-emulator";
 interface TerminalPaneProps {
   serverId: string;
   cwd: string;
-  selectedTerminalId?: string | null;
+  selectedTerminalId: string | null;
   onSelectedTerminalIdChange?: (terminalId: string | null) => void;
   hideHeader?: boolean;
   manageTerminalDirectorySubscription?: boolean;
@@ -142,7 +142,7 @@ function TerminalCloseGradient({ color, gradientId }: { color: string; gradientI
 export function TerminalPane({
   serverId,
   cwd,
-  selectedTerminalId: selectedTerminalIdProp,
+  selectedTerminalId,
   onSelectedTerminalIdChange,
   hideHeader = false,
   manageTerminalDirectorySubscription = true,
@@ -165,19 +165,10 @@ export function TerminalPane({
 
   const scopeKey = useMemo(() => terminalScopeKey({ serverId, cwd }), [serverId, cwd]);
   const terminalsQueryKey = useMemo(() => ["terminals", serverId, cwd] as const, [cwd, serverId]);
-  const selectedTerminalByScopeRef = useRef<Map<string, string>>(new Map());
   const lastReportedSizeRef = useRef<{ rows: number; cols: number } | null>(null);
   const streamControllerRef = useRef<TerminalStreamController | null>(null);
   const outputPumpRef = useRef<TerminalOutputPump | null>(null);
   const outputDeliveryQueueRef = useRef<TerminalOutputDeliveryQueue | null>(null);
-  const isSelectedTerminalControlled =
-    typeof selectedTerminalIdProp !== "undefined";
-
-  const [uncontrolledSelectedTerminalId, setUncontrolledSelectedTerminalId] =
-    useState<string | null>(null);
-  const selectedTerminalId = isSelectedTerminalControlled
-    ? selectedTerminalIdProp ?? null
-    : uncontrolledSelectedTerminalId;
   const [selectedOutputChunk, setSelectedOutputChunk] = useState<TerminalOutputChunkState>({
     sequence: 0,
     text: "",
@@ -203,25 +194,10 @@ export function TerminalPane({
   const keyboardRefitTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
 
   const updateSelectedTerminalId = useCallback(
-    (
-      next:
-        | string
-        | null
-        | ((current: string | null) => string | null)
-    ) => {
-      const current = selectedTerminalIdRef.current;
-      const resolved =
-        typeof next === "function"
-          ? (next as (value: string | null) => string | null)(current)
-          : next;
-      selectedTerminalIdRef.current = resolved;
-      if (isSelectedTerminalControlled) {
-        onSelectedTerminalIdChange?.(resolved);
-        return;
-      }
-      setUncontrolledSelectedTerminalId(resolved);
+    (next: string | null) => {
+      onSelectedTerminalIdChange?.(next);
     },
-    [isSelectedTerminalControlled, onSelectedTerminalIdChange]
+    [onSelectedTerminalIdChange]
   );
 
   useEffect(() => {
@@ -469,9 +445,6 @@ export function TerminalPane({
             requestId: current?.requestId ?? `terminal-create-${createdTerminal.id}`,
           };
         });
-        if (!isSelectedTerminalControlled) {
-          selectedTerminalByScopeRef.current.set(scopeKey, createdTerminal.id);
-        }
         updateSelectedTerminalId(createdTerminal.id);
         requestTerminalFocus();
       }
@@ -496,9 +469,7 @@ export function TerminalPane({
       setHoveredTerminalId((current) => (current === terminalId ? null : current));
       outputPumpRef.current?.clearTerminal({ terminalId });
       if (selectedTerminalIdRef.current === terminalId) {
-        updateSelectedTerminalId((current) =>
-          current === terminalId ? null : current
-        );
+        updateSelectedTerminalId(null);
         setModifiers({ ...EMPTY_MODIFIERS });
       }
       void queryClient.invalidateQueries({
@@ -512,56 +483,8 @@ export function TerminalPane({
   });
 
   useEffect(() => {
-    if (!isSelectedTerminalControlled) {
-      updateSelectedTerminalId(selectedTerminalByScopeRef.current.get(scopeKey) ?? null);
-    }
     lastReportedSizeRef.current = null;
-  }, [isSelectedTerminalControlled, scopeKey, updateSelectedTerminalId]);
-
-  useEffect(() => {
-    if (isSelectedTerminalControlled) {
-      return;
-    }
-    if (selectedTerminalId) {
-      selectedTerminalByScopeRef.current.set(scopeKey, selectedTerminalId);
-    }
-  }, [isSelectedTerminalControlled, scopeKey, selectedTerminalId]);
-
-  useEffect(() => {
-    if (terminals.length === 0) {
-      updateSelectedTerminalId(null);
-      return;
-    }
-
-    const has = (id: string | null | undefined) =>
-      Boolean(id && terminals.some((terminal) => terminal.id === id));
-
-    if (has(selectedTerminalId)) {
-      return;
-    }
-
-    const stored = isSelectedTerminalControlled
-      ? null
-      : selectedTerminalByScopeRef.current.get(scopeKey);
-    if (has(stored)) {
-      updateSelectedTerminalId(stored!);
-      return;
-    }
-
-    const fallback = terminals[0]?.id ?? null;
-    if (fallback) {
-      if (!isSelectedTerminalControlled) {
-        selectedTerminalByScopeRef.current.set(scopeKey, fallback);
-      }
-      updateSelectedTerminalId(fallback);
-    }
-  }, [
-    isSelectedTerminalControlled,
-    scopeKey,
-    terminals,
-    selectedTerminalId,
-    updateSelectedTerminalId,
-  ]);
+  }, [scopeKey]);
 
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id);

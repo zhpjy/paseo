@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
+import type { SidebarShortcutWorkspaceTarget } from "@/utils/sidebar-shortcuts";
 
 export type MessageInputActionRequest = {
   id: number;
@@ -12,8 +13,8 @@ interface KeyboardShortcutsState {
   shortcutsDialogOpen: boolean;
   altDown: boolean;
   cmdOrCtrlDown: boolean;
-  /** Sidebar-visible agent keys (up to 9), in top-to-bottom visual order. */
-  sidebarShortcutAgentKeys: string[];
+  /** Sidebar-visible workspace targets (up to 9), in top-to-bottom visual order. */
+  sidebarShortcutWorkspaceTargets: SidebarShortcutWorkspaceTarget[];
   messageInputActionRequest: MessageInputActionRequest | null;
   nextMessageInputActionRequestId: number;
 
@@ -21,7 +22,7 @@ interface KeyboardShortcutsState {
   setShortcutsDialogOpen: (open: boolean) => void;
   setAltDown: (down: boolean) => void;
   setCmdOrCtrlDown: (down: boolean) => void;
-  setSidebarShortcutAgentKeys: (keys: string[]) => void;
+  setSidebarShortcutWorkspaceTargets: (targets: SidebarShortcutWorkspaceTarget[]) => void;
   resetModifiers: () => void;
 
   requestMessageInputAction: (input: {
@@ -37,7 +38,7 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>(
     shortcutsDialogOpen: false,
     altDown: false,
     cmdOrCtrlDown: false,
-    sidebarShortcutAgentKeys: [],
+    sidebarShortcutWorkspaceTargets: [],
     messageInputActionRequest: null,
     nextMessageInputActionRequestId: 1,
 
@@ -45,7 +46,8 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>(
     setShortcutsDialogOpen: (open) => set({ shortcutsDialogOpen: open }),
     setAltDown: (down) => set({ altDown: down }),
     setCmdOrCtrlDown: (down) => set({ cmdOrCtrlDown: down }),
-    setSidebarShortcutAgentKeys: (keys) => set({ sidebarShortcutAgentKeys: keys }),
+    setSidebarShortcutWorkspaceTargets: (targets) =>
+      set({ sidebarShortcutWorkspaceTargets: targets }),
     resetModifiers: () => set({ altDown: false, cmdOrCtrlDown: false }),
 
     requestMessageInputAction: ({ agentKey, kind }) => {

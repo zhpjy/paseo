@@ -4,7 +4,6 @@ import {
   BackHandler,
   Platform,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -23,7 +22,6 @@ import {
   Pencil,
   SquareTerminal,
   Terminal,
-  X,
 } from "lucide-react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 import { StyleSheet, UnistylesRuntime, useUnistyles } from "react-native-unistyles";
@@ -40,17 +38,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ExplorerSidebar } from "@/components/explorer-sidebar";
 import { FilePane } from "@/components/file-pane";
 import { TerminalPane } from "@/components/terminal-pane";
-import { SortableInlineList } from "@/components/sortable-inline-list";
 import { ExplorerSidebarAnimationProvider } from "@/contexts/explorer-sidebar-animation-context";
 import { useToast } from "@/contexts/toast-context";
 import { useExplorerOpenGesture } from "@/hooks/use-explorer-open-gesture";
@@ -69,7 +63,6 @@ import {
   buildHostWorkspaceFileRoute,
   buildHostWorkspaceTabRoute,
   buildHostWorkspaceTerminalRoute,
-  encodeFilePathForPathSegment,
   decodeWorkspaceIdFromPathSegment,
 } from "@/utils/host-routes";
 import { useHostRuntimeSession } from "@/runtime/host-runtime";
@@ -87,6 +80,14 @@ import { useArchiveAgent } from "@/hooks/use-archive-agent";
 import { buildProviderCommand } from "@/utils/provider-command-templates";
 import { generateDraftId } from "@/stores/draft-keys";
 import { WorkspaceDraftAgentTab } from "@/screens/workspace/workspace-draft-agent-tab";
+import { WorkspaceDesktopTabsRow } from "@/screens/workspace/workspace-desktop-tabs-row";
+import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import {
+  deriveProjectDisplayName,
+  deriveProjectKey,
+  deriveProjectName,
+  deriveRemoteProjectKey,
+} from "@/utils/agent-grouping";
 
 const TERMINALS_QUERY_STALE_TIME = 5_000;
 const DROPDOWN_WIDTH = 220;
@@ -105,41 +106,6 @@ type WorkspaceScreenProps = {
   routeTab: RouteTabTarget;
   routeTabId?: string | null;
 };
-
-type WorkspaceTabDescriptor =
-  | {
-      key: string;
-      tabId: string;
-      kind: "draft";
-      draftId: string;
-      label: string;
-      subtitle: string;
-    }
-  | {
-      key: string;
-      tabId: string;
-      kind: "agent";
-      agentId: string;
-      provider: Agent["provider"];
-      label: string;
-      subtitle: string;
-    }
-  | {
-      key: string;
-      tabId: string;
-      kind: "terminal";
-      terminalId: string;
-      label: string;
-      subtitle: string;
-    }
-  | {
-      key: string;
-      tabId: string;
-      kind: "file";
-      filePath: string;
-      label: string;
-      subtitle: string;
-    };
 
 function applyWorkspaceTabOrder(input: {
   tabs: WorkspaceTabDescriptor[];
@@ -199,20 +165,15 @@ function deriveWorkspaceName(workspaceId: string): string {
   return last ?? workspaceId;
 }
 
-function deriveWorkspaceHeaderTitle(input: {
-  workspaceName: string;
+function deriveWorkspaceProjectDisplayName(input: {
+  workspaceId: string;
   checkout: CheckoutStatusPayload | null;
 }): string {
-  if (!input.checkout?.isGit) {
-    return input.workspaceName;
-  }
-
-  const branch = trimNonEmpty(input.checkout.currentBranch ?? null);
-  if (!branch || branch === "HEAD") {
-    return input.workspaceName;
-  }
-
-  return branch;
+  const projectKey =
+    deriveRemoteProjectKey(input.checkout?.remoteUrl ?? null) ??
+    deriveProjectKey(input.workspaceId);
+  const projectName = deriveProjectName(projectKey);
+  return deriveProjectDisplayName({ projectKey, projectName });
 }
 
 function formatProviderLabel(provider: Agent["provider"]): string {
@@ -566,13 +527,13 @@ function WorkspaceScreenContent({
     () => deriveWorkspaceName(normalizedWorkspaceId),
     [normalizedWorkspaceId]
   );
-  const headerTitle = useMemo(
+  const headerProjectName = useMemo(
     () =>
-      deriveWorkspaceHeaderTitle({
-        workspaceName,
+      deriveWorkspaceProjectDisplayName({
+        workspaceId: normalizedWorkspaceId,
         checkout: checkoutQuery.data ?? null,
       }),
-    [checkoutQuery.data, workspaceName]
+    [checkoutQuery.data, normalizedWorkspaceId]
   );
 
   const isGitCheckout = checkoutQuery.data?.isGit ?? false;
@@ -1507,9 +1468,14 @@ function WorkspaceScreenContent({
             left={
               <>
                 <SidebarMenuToggle />
-                <Text style={styles.headerTitle} numberOfLines={1}>
-                  {headerTitle}
-                </Text>
+                <View style={styles.headerTitleContainer}>
+                  <Text style={styles.headerTitle} numberOfLines={1}>
+                    {workspaceName}
+                  </Text>
+                  <Text style={styles.headerProjectTitle} numberOfLines={1}>
+                    {headerProjectName}
+                  </Text>
+                </View>
               </>
             }
             right={
@@ -1745,287 +1711,30 @@ function WorkspaceScreenContent({
               />
             </View>
           ) : (
-            <View style={styles.tabsContainer} testID="workspace-tabs-row">
-              <ScrollView
-                horizontal
-                testID="workspace-tabs-scroll"
-                style={styles.tabsScroll}
-                contentContainerStyle={styles.tabsContent}
-                showsHorizontalScrollIndicator={false}
-              >
-                <SortableInlineList
-                  data={tabs}
-                  keyExtractor={(tab) => tab.key}
-                  useDragHandle
-                  disabled={tabs.length < 2}
-                  onDragEnd={handleReorderTabs}
-                  renderItem={({ item: tab, dragHandleProps }) => {
-                    const isActive = tab.key === activeTabKey;
-                    const tabAgent =
-                      tab.kind === "agent" ? agentsById.get(tab.agentId) ?? null : null;
-                    const isCloseHovered = hoveredCloseTabKey === tab.key;
-                    const isClosingAgent =
-                      tab.kind === "agent" &&
-                      isArchivingAgent({
-                        serverId: normalizedServerId,
-                        agentId: tab.agentId,
-                      });
-                    const isClosingTerminal =
-                      tab.kind === "terminal" &&
-                      killTerminalMutation.isPending &&
-                      killTerminalMutation.variables === tab.terminalId;
-                    const isClosingTab = isClosingAgent || isClosingTerminal;
-                    const shouldShowCloseButton = true;
-                    const iconColor = isActive
-                      ? theme.colors.foreground
-                      : theme.colors.foregroundMuted;
-                    const tabAgentStatusBucket = tabAgent
-                      ? deriveSidebarStateBucket({
-                          status: tabAgent.status,
-                          pendingPermissionCount: tabAgent.pendingPermissions.length,
-                          requiresAttention: tabAgent.requiresAttention,
-                          attentionReason: tabAgent.attentionReason,
-                        })
-                      : null;
-                    const tabAgentStatusColor =
-                      tabAgentStatusBucket === null
-                        ? null
-                        : getStatusDotColor({
-                            theme,
-                            bucket: tabAgentStatusBucket,
-                            showDoneAsInactive: false,
-                          });
-                    const icon =
-                      tab.kind === "agent" ? (
-                        <View style={styles.tabAgentIconWrapper}>
-                          {tab.provider === "claude" ? (
-                            <ClaudeIcon size={14} color={iconColor} />
-                          ) : tab.provider === "codex" ? (
-                            <CodexIcon size={14} color={iconColor} />
-                          ) : (
-                            <Bot size={14} color={iconColor} />
-                          )}
-                          {tabAgentStatusColor ? (
-                            <View
-                              style={[
-                                styles.tabStatusDot,
-                                {
-                                  backgroundColor: tabAgentStatusColor,
-                                  borderColor: theme.colors.surface0,
-                                },
-                              ]}
-                            />
-                          ) : null}
-                        </View>
-                      ) : tab.kind === "draft" ? (
-                        <Pencil size={14} color={iconColor} />
-                      ) : tab.kind === "file" ? (
-                        <FileText size={14} color={iconColor} />
-                      ) : (
-                        <Terminal size={14} color={iconColor} />
-                      );
-
-                    const contextMenuTestId = `workspace-tab-context-${tab.key}`;
-
-                    return (
-                      <ContextMenu key={tab.key}>
-                        <ContextMenuTrigger
-                          testID={`workspace-tab-${tab.key}`}
-                          enabledOnMobile={false}
-                          style={({ hovered, pressed }) => [
-                            styles.tab,
-                            isActive && styles.tabActive,
-                            (hovered || pressed || isCloseHovered) && styles.tabHovered,
-                          ]}
-                          onHoverIn={() => {
-                            setHoveredTabKey(tab.key);
-                          }}
-                          onHoverOut={() => {
-                            setHoveredTabKey((current) =>
-                              current === tab.key ? null : current
-                            );
-                          }}
-                          onPress={() => {
-                            navigateToTabId(tab.tabId);
-                          }}
-                        >
-                          <View
-                            {...(dragHandleProps?.attributes as any)}
-                            {...(dragHandleProps?.listeners as any)}
-                            ref={(node: unknown) => {
-                              dragHandleProps?.setActivatorNodeRef?.(node);
-                            }}
-                            style={styles.tabHandle}
-                          >
-                            <View style={styles.tabIcon}>{icon}</View>
-                            <Text
-                              style={[
-                                styles.tabLabel,
-                                isActive && styles.tabLabelActive,
-                                shouldShowCloseButton && styles.tabLabelWithCloseButton,
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {tab.label}
-                            </Text>
-                          </View>
-
-                          <Pressable
-                          testID={
-                            tab.kind === "agent"
-                              ? `workspace-agent-close-${tab.agentId}`
-                              : tab.kind === "terminal"
-                                  ? `workspace-terminal-close-${tab.terminalId}`
-                                  : tab.kind === "draft"
-                                    ? `workspace-draft-close-${tab.draftId}`
-                                  : `workspace-file-close-${encodeFilePathForPathSegment(tab.filePath)}`
-                            }
-                            pointerEvents={shouldShowCloseButton ? "auto" : "none"}
-                            disabled={!shouldShowCloseButton || isClosingTab}
-                            onHoverIn={() => {
-                              setHoveredTabKey(tab.key);
-                              setHoveredCloseTabKey(tab.key);
-                            }}
-                            onHoverOut={() => {
-                              setHoveredTabKey((current) =>
-                                current === tab.key ? null : current
-                              );
-                              setHoveredCloseTabKey((current) =>
-                                current === tab.key ? null : current
-                              );
-                            }}
-                            onPress={(event) => {
-                              event.stopPropagation?.();
-                              void handleCloseTabById(tab.tabId);
-                            }}
-                            style={({ hovered, pressed }) => [
-                              styles.tabCloseButton,
-                              shouldShowCloseButton
-                                ? styles.tabCloseButtonShown
-                                : styles.tabCloseButtonHidden,
-                              (hovered || pressed) && styles.tabCloseButtonActive,
-                            ]}
-                          >
-                            {isClosingTab ? (
-                              <ActivityIndicator
-                                size={12}
-                                color={theme.colors.foregroundMuted}
-                              />
-                            ) : (
-                              <X size={12} color={theme.colors.foregroundMuted} />
-                            )}
-                          </Pressable>
-                        </ContextMenuTrigger>
-
-                        <ContextMenuContent
-                          align="start"
-                          width={DROPDOWN_WIDTH}
-                          testID={contextMenuTestId}
-                        >
-                          {tab.kind === "agent" ? (
-                            <>
-                              <ContextMenuItem
-                                testID={`${contextMenuTestId}-copy-resume-command`}
-                                onSelect={() => {
-                                  void handleCopyResumeCommand(tab.agentId);
-                                }}
-                              >
-                                Copy resume command
-                              </ContextMenuItem>
-                              <ContextMenuItem
-                                testID={`${contextMenuTestId}-copy-agent-id`}
-                                onSelect={() => {
-                                  void handleCopyAgentId(tab.agentId);
-                                }}
-                              >
-                                Copy agent id
-                              </ContextMenuItem>
-                            </>
-                          ) : null}
-
-                          <ContextMenuSeparator />
-
-                          <ContextMenuItem
-                            testID={`${contextMenuTestId}-close-right`}
-                            disabled={
-                              tabs.findIndex((t) => t.key === tab.key) === tabs.length - 1
-                            }
-                            onSelect={() => {
-                              void handleCloseTabsToRight(tab.tabId);
-                            }}
-                          >
-                            Close to the right
-                          </ContextMenuItem>
-                          <ContextMenuItem
-                            testID={`${contextMenuTestId}-close`}
-                            onSelect={() => {
-                              void handleCloseTabById(tab.tabId);
-                            }}
-                          >
-                            Close
-                          </ContextMenuItem>
-                        </ContextMenuContent>
-                      </ContextMenu>
-                    );
-                  }}
-                />
-              </ScrollView>
-              <View style={styles.tabsActions}>
-                <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-                  <TooltipTrigger
-                    testID="workspace-new-agent-tab"
-                    onPress={() => handleSelectNewTabOption(NEW_TAB_AGENT_OPTION_ID)}
-                    accessibilityRole="button"
-                    accessibilityLabel="New agent tab"
-                    style={({ hovered, pressed }) => [
-                      styles.newTabActionButton,
-                      (hovered || pressed) && styles.newTabActionButtonHovered,
-                    ]}
-                  >
-                    <Plus size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" align="end" offset={8}>
-                    <Text style={styles.newTabTooltipText}>New agent tab</Text>
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-                  <TooltipTrigger
-                    testID="workspace-new-terminal-tab"
-                    onPress={() => handleSelectNewTabOption(NEW_TAB_TERMINAL_OPTION_ID)}
-                    onHoverIn={() => setIsNewTerminalHovered(true)}
-                    onHoverOut={() => setIsNewTerminalHovered(false)}
-                    disabled={createTerminalMutation.isPending}
-                    accessibilityRole="button"
-                    accessibilityLabel="New terminal tab"
-                    style={({ hovered, pressed }) => [
-                      styles.newTabActionButton,
-                      createTerminalMutation.isPending && styles.newTabActionButtonDisabled,
-                      (hovered || pressed) && styles.newTabActionButtonHovered,
-                    ]}
-                  >
-                    {createTerminalMutation.isPending ? (
-                      <ActivityIndicator
-                        size="small"
-                        color={theme.colors.foregroundMuted}
-                      />
-                    ) : (
-                      <View style={styles.terminalPlusIcon}>
-                        <SquareTerminal
-                          size={theme.iconSize.sm}
-                          color={theme.colors.foregroundMuted}
-                        />
-                        <View style={[styles.terminalPlusBadge, isNewTerminalHovered && styles.terminalPlusBadgeHovered]}>
-                          <Plus size={10} color={theme.colors.foregroundMuted} />
-                        </View>
-                      </View>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" align="end" offset={8}>
-                    <Text style={styles.newTabTooltipText}>New terminal tab</Text>
-                  </TooltipContent>
-                </Tooltip>
-              </View>
-            </View>
+            <WorkspaceDesktopTabsRow
+              tabs={tabs}
+              activeTabKey={activeTabKey}
+              agentsById={agentsById}
+              normalizedServerId={normalizedServerId}
+              hoveredCloseTabKey={hoveredCloseTabKey}
+              setHoveredTabKey={setHoveredTabKey}
+              setHoveredCloseTabKey={setHoveredCloseTabKey}
+              isArchivingAgent={isArchivingAgent}
+              killTerminalPending={killTerminalMutation.isPending}
+              killTerminalId={killTerminalMutation.variables ?? null}
+              onNavigateTab={navigateToTabId}
+              onCloseTab={handleCloseTabById}
+              onCopyResumeCommand={handleCopyResumeCommand}
+              onCopyAgentId={handleCopyAgentId}
+              onCloseTabsToRight={handleCloseTabsToRight}
+              onSelectNewTabOption={handleSelectNewTabOption}
+              newTabAgentOptionId={NEW_TAB_AGENT_OPTION_ID}
+              newTabTerminalOptionId={NEW_TAB_TERMINAL_OPTION_ID}
+              createTerminalPending={createTerminalMutation.isPending}
+              isNewTerminalHovered={isNewTerminalHovered}
+              setIsNewTerminalHovered={setIsNewTerminalHovered}
+              onReorderTabs={handleReorderTabs}
+            />
           )}
 
           <View style={styles.centerContent}>
@@ -2067,13 +1776,25 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   headerTitle: {
-    flex: 1,
     fontSize: theme.fontSize.base,
     fontWeight: {
       xs: "400",
       md: "300",
     },
     color: theme.colors.foreground,
+    flexShrink: 1,
+  },
+  headerTitleContainer: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  headerProjectTitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    flexShrink: 1,
   },
   headerRight: {
     flexDirection: "row",

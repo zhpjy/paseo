@@ -1,56 +1,69 @@
 import { describe, expect, it } from "vitest";
+import type { SidebarProjectEntry, SidebarWorkspaceEntry } from "@/hooks/use-sidebar-agents-list";
 
-import { deriveSidebarShortcutAgentKeys, parseSidebarAgentKey } from "./sidebar-shortcuts";
+import { buildSidebarWorkspaceViewModel } from "./sidebar-shortcuts";
 
-describe("parseSidebarAgentKey", () => {
-  it("parses serverId and agentId", () => {
-    expect(parseSidebarAgentKey("server:agent")).toEqual({ serverId: "server", agentId: "agent" });
-  });
+function workspace(serverId: string, cwd: string): SidebarWorkspaceEntry {
+  return {
+    workspaceKey: `${serverId}:${cwd}`,
+    serverId,
+    cwd,
+    branchName: null,
+    createdAt: null,
+    isMainCheckout: false,
+    isPaseoOwnedWorktree: false,
+    statusBucket: "done",
+  };
+}
 
-  it("returns null for invalid keys", () => {
-    expect(parseSidebarAgentKey("")).toBeNull();
-    expect(parseSidebarAgentKey("no-separator")).toBeNull();
-    expect(parseSidebarAgentKey(":agent")).toBeNull();
-    expect(parseSidebarAgentKey("server:")).toBeNull();
-  });
-});
+function project(projectKey: string, workspaces: SidebarWorkspaceEntry[]): SidebarProjectEntry {
+  return {
+    projectKey,
+    projectName: projectKey,
+    iconWorkingDir: workspaces[0]?.cwd ?? "",
+    statusBucket: "done",
+    activeCount: 0,
+    totalCount: workspaces.length,
+    latestCreatedAt: null,
+    workspaces,
+  };
+}
 
-describe("deriveSidebarShortcutAgentKeys", () => {
-  it("skips collapsed projects and preserves visual order", () => {
-    const sections = [
-      {
-        projectKey: "p1",
-        agents: [
-          { serverId: "s", id: "a1" },
-          { serverId: "s", id: "a2" },
-        ],
-      },
-      {
-        projectKey: "p2",
-        agents: [
-          { serverId: "s", id: "b1" },
-          { serverId: "s", id: "b2" },
-        ],
-      },
+describe("buildSidebarWorkspaceViewModel", () => {
+  it("builds visible rows and shortcut targets in visual order", () => {
+    const projects = [
+      project("p1", [workspace("s1", "/repo/main"), workspace("s1", "/repo/feat-a")]),
+      project("p2", [workspace("s1", "/repo2/main")]),
     ];
 
-    expect(deriveSidebarShortcutAgentKeys(sections, new Set(["p2"]), 9)).toEqual([
-      "s:a1",
-      "s:a2",
+    const model = buildSidebarWorkspaceViewModel({
+      projects,
+      collapsedProjectKeys: new Set<string>(["p2"]),
+      getProjectDisplayName: (entry) => entry.projectName,
+    });
+
+    expect(model.rows.map((row) => row.kind)).toEqual(["project", "workspace", "workspace", "project"]);
+    expect(model.shortcutTargets).toEqual([
+      { serverId: "s1", workspaceId: "/repo/main" },
+      { serverId: "s1", workspaceId: "/repo/feat-a" },
     ]);
+    expect(model.shortcutIndexByWorkspaceKey.get("s1:/repo/main")).toBe(1);
+    expect(model.shortcutIndexByWorkspaceKey.get("s1:/repo/feat-a")).toBe(2);
+    expect(model.shortcutIndexByWorkspaceKey.get("s1:/repo2/main")).toBeUndefined();
   });
 
-  it("limits to 9", () => {
-    const sections = [
-      {
-        projectKey: "p1",
-        agents: Array.from({ length: 20 }, (_, i) => ({ serverId: "s", id: `a${i + 1}` })),
-      },
-    ];
+  it("limits shortcuts to 9", () => {
+    const workspaces = Array.from({ length: 20 }, (_, index) => workspace("s", `/repo/w${index + 1}`));
+    const projects = [project("p", workspaces)];
 
-    expect(deriveSidebarShortcutAgentKeys(sections, new Set(), 9)).toHaveLength(9);
-    expect(deriveSidebarShortcutAgentKeys(sections, new Set(), 9)[0]).toBe("s:a1");
-    expect(deriveSidebarShortcutAgentKeys(sections, new Set(), 9)[8]).toBe("s:a9");
+    const model = buildSidebarWorkspaceViewModel({
+      projects,
+      collapsedProjectKeys: new Set<string>(),
+      getProjectDisplayName: (entry) => entry.projectName,
+    });
+
+    expect(model.shortcutTargets).toHaveLength(9);
+    expect(model.shortcutTargets[0]).toEqual({ serverId: "s", workspaceId: "/repo/w1" });
+    expect(model.shortcutTargets[8]).toEqual({ serverId: "s", workspaceId: "/repo/w9" });
   });
 });
-

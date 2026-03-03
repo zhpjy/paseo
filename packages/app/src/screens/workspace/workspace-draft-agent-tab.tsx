@@ -273,7 +273,6 @@ export function WorkspaceDraftAgentTab({
           return next;
         });
 
-        void client.refreshAgent(agentId).catch(() => undefined);
         onCreated(result);
         return;
       } catch (error) {
