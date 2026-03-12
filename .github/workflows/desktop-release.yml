@@ -386,6 +386,17 @@ jobs:
           set -euxo pipefail
           appimage_dir="packages/desktop/src-tauri/target/release/bundle/appimage"
           appdir_path="$appimage_dir/Paseo.AppDir"
+          existing_appimage="$(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
+          if [ -n "$existing_appimage" ]; then
+            canonical_appimage="$appimage_dir/Paseo_${DESKTOP_VERSION}_amd64.AppImage"
+            if [ "$existing_appimage" != "$canonical_appimage" ]; then
+              mv "$existing_appimage" "$canonical_appimage"
+            fi
+            if [ ! -f "$canonical_appimage.sig" ]; then
+              npx tauri signer sign "$canonical_appimage"
+            fi
+            exit 0
+          fi
           if [ ! -d "$appdir_path" ]; then
             echo "::error::AppDir was not generated at $appdir_path"
             exit 1

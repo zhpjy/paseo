@@ -293,6 +293,7 @@ async function installPackedWorkspaces(runtimeRoot, bundledNodeRoot, tarballs) {
     [
       npmCli,
       "install",
+      "--include=optional",
       "--omit=dev",
       "--no-package-lock",
       "--no-save",
