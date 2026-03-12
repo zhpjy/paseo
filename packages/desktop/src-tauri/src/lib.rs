@@ -536,8 +536,9 @@ pub fn run() {
             garbage_collect_attachment_files
         ])
         .setup(|app| {
+            let setup_start = std::time::Instant::now();
             log::info!(
-                "[app] Paseo Desktop v{} starting",
+                "[app] Paseo Desktop v{} setup starting",
                 app.package_info().version
             );
 
@@ -645,6 +646,7 @@ pub fn run() {
             }
 
             app.set_menu(menu)?;
+            log::info!("[app] setup complete ({}ms)", setup_start.elapsed().as_millis());
 
             let window = app.get_webview_window("main").unwrap();
             let window_clone = window.clone();

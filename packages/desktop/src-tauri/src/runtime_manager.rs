@@ -574,8 +574,10 @@ fn managed_daemon_status_internal(app: &AppHandle) -> Result<ManagedDaemonStatus
 }
 
 fn start_managed_daemon_internal(app: &AppHandle) -> Result<ManagedDaemonStatus, String> {
+    let t0 = std::time::Instant::now();
     log::info!("[daemon] starting managed daemon");
     let status = ensure_runtime_ready_internal(app)?;
+    log::info!("[daemon] runtime ready ({}ms)", t0.elapsed().as_millis());
     let runtime_root = PathBuf::from(&status.runtime_root);
     let manifest = load_runtime_manifest(&runtime_root)?;
     let output = cli_command(&runtime_root, &manifest, &["start"])?
@@ -599,20 +601,21 @@ fn start_managed_daemon_internal(app: &AppHandle) -> Result<ManagedDaemonStatus,
             stderr
         ));
     }
-    log::info!("[daemon] start command succeeded, waiting for daemon to be ready");
+    log::info!("[daemon] start command succeeded ({}ms), waiting for daemon to be ready", t0.elapsed().as_millis());
     for attempt in 0..150 {
         let daemon_status = managed_daemon_status_internal(app)?;
         if daemon_status.status == "running" && !daemon_status.server_id.trim().is_empty() {
             log::info!(
-                "[daemon] ready after {} attempts (pid={:?})",
+                "[daemon] ready after {} attempts, {}ms (pid={:?})",
                 attempt + 1,
+                t0.elapsed().as_millis(),
                 daemon_status.pid
             );
             return Ok(daemon_status);
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    log::warn!("[daemon] timed out waiting for daemon to become ready");
+    log::warn!("[daemon] timed out waiting for daemon to become ready ({}ms)", t0.elapsed().as_millis());
     managed_daemon_status_internal(app)
 }
 

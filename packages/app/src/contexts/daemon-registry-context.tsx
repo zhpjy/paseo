@@ -483,15 +483,20 @@ export function DaemonRegistryProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     const bootstrapDesktopStartup = async () => {
+      const t0 = performance.now()
+      const elapsed = () => Math.round(performance.now() - t0)
       try {
         const isE2E = await AsyncStorage.getItem(E2E_STORAGE_KEY)
         if (cancelled || isE2E) {
           return
         }
 
+        console.info('[DaemonRegistry] desktop bootstrap: starting', { elapsedMs: elapsed() })
         await Promise.allSettled([
           (async () => {
+            console.info('[DaemonRegistry] desktop bootstrap: startManagedDaemon', { elapsedMs: elapsed() })
             const daemon = await startManagedDaemon()
+            console.info('[DaemonRegistry] desktop bootstrap: managed daemon ready', { elapsedMs: elapsed(), serverId: daemon.serverId })
             if (cancelled || !daemon.serverId) {
               return
             }
@@ -506,15 +511,18 @@ export function DaemonRegistryProvider({ children }: { children: ReactNode }) {
               label: daemon.hostname ?? undefined,
               connection,
             })
+            console.info('[DaemonRegistry] desktop bootstrap: host connection upserted', { elapsedMs: elapsed() })
           })().catch((managedBootstrapError) => {
             if (!cancelled) {
               console.warn(
                 '[DaemonRegistry] Failed to bootstrap desktop daemon connection',
+                { elapsedMs: elapsed() },
                 managedBootstrapError
               )
             }
           }),
           (async () => {
+            console.info('[DaemonRegistry] desktop bootstrap: probing localhost', { elapsedMs: elapsed() })
             const { serverId, hostname } = await probeConnection(
               {
                 id: `bootstrap:${DEFAULT_LOCALHOST_ENDPOINT}`,
@@ -523,6 +531,7 @@ export function DaemonRegistryProvider({ children }: { children: ReactNode }) {
               },
               { timeoutMs: DEFAULT_LOCALHOST_BOOTSTRAP_TIMEOUT_MS }
             )
+            console.info('[DaemonRegistry] desktop bootstrap: localhost probe succeeded', { elapsedMs: elapsed(), serverId })
             if (cancelled) {
               return
             }
@@ -532,8 +541,9 @@ export function DaemonRegistryProvider({ children }: { children: ReactNode }) {
               endpoint: DEFAULT_LOCALHOST_ENDPOINT,
               label: hostname ?? undefined,
             })
+            console.info('[DaemonRegistry] desktop bootstrap: direct connection upserted', { elapsedMs: elapsed() })
           })().catch(() => {
-            // Best-effort startup race only; ignore if localhost isn't reachable.
+            console.info('[DaemonRegistry] desktop bootstrap: localhost probe failed', { elapsedMs: elapsed() })
           }),
         ])
       } catch (bootstrapError) {

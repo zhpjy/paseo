@@ -75,8 +75,8 @@ function readPidSocketTarget(paseoHome: string): string | null {
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(pidPath, 'utf-8')) as { sockPath?: unknown }
-    return typeof parsed.sockPath === 'string' ? parsed.sockPath : null
+    const parsed = JSON.parse(readFileSync(pidPath, 'utf-8')) as { listen?: unknown; sockPath?: unknown }
+    return typeof parsed.listen === 'string' ? parsed.listen : typeof parsed.sockPath === 'string' ? parsed.sockPath : null
   } catch {
     return null
   }

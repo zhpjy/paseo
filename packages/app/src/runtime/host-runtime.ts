@@ -143,7 +143,9 @@ export type HostRuntimeStartOptions = {
   autoProbe?: boolean;
 };
 
-const PROBE_INTERVAL_MS = 10_000;
+const PROBE_TICK_MS = 2_000;
+const PROBE_STEADY_MS = 10_000;
+const PROBE_MAX_BACKOFF_MS = 30_000;
 const ADAPTIVE_SWITCH_THRESHOLD_MS = 40;
 const ADAPTIVE_SWITCH_CONSECUTIVE_PROBES = 3;
 const DEFAULT_AGENT_DIRECTORY_PAGE_LIMIT = 200;
@@ -419,19 +421,19 @@ function findConnectionById(
   return host.connections.find((connection) => connection.id === connectionId) ?? null;
 }
 
-function selectInitialConnectionId(host: HostProfile): string | null {
-  if (host.connections.length === 0) {
-    return null;
+function probeIntervalForConnection(
+  firstSeenAt: number,
+  isActiveOnline: boolean,
+  now: number
+): number {
+  if (isActiveOnline) {
+    return PROBE_STEADY_MS;
   }
-  if (host.preferredConnectionId) {
-    const preferred = host.connections.find(
-      (connection) => connection.id === host.preferredConnectionId
-    );
-    if (preferred) {
-      return preferred.id;
-    }
-  }
-  return host.connections[0]?.id ?? null;
+  const age = now - firstSeenAt;
+  if (age < 10_000) return 2_000;
+  if (age < 30_000) return 5_000;
+  if (age < 60_000) return PROBE_STEADY_MS;
+  return PROBE_MAX_BACKOFF_MS;
 }
 
 function createDefaultDeps(): HostRuntimeControllerDeps {
@@ -507,6 +509,8 @@ export class HostRuntimeController {
   private unsubscribeClientStatus: (() => void) | null = null;
   private probeIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  private connectionFirstSeenAt = new Map<string, number>();
+  private connectionLastProbedAt = new Map<string, number>();
   private switchCandidateConnectionId: string | null = null;
   private switchCandidateHitCount = 0;
   private clientIdPromise: Promise<string> | null = null;
@@ -555,19 +559,12 @@ export class HostRuntimeController {
       return;
     }
     this.started = true;
+    this.trackConnectionFirstSeen();
     await this.runProbeCycleNow();
-
-    if (!this.snapshot.activeConnectionId) {
-      const fallbackConnectionId = selectInitialConnectionId(this.host);
-      if (fallbackConnectionId) {
-        await this.switchToConnection({ connectionId: fallbackConnectionId });
-      }
-    }
-
-    if (options?.autoProbe !== false && PROBE_INTERVAL_MS > 0) {
+    if (options?.autoProbe !== false) {
       this.probeIntervalHandle = setInterval(() => {
         void this.runProbeCycleNow();
-      }, PROBE_INTERVAL_MS);
+      }, PROBE_TICK_MS);
     }
   }
 
@@ -597,20 +594,8 @@ export class HostRuntimeController {
 
   async updateHost(host: HostProfile): Promise<void> {
     this.host = host;
-    const activeConnectionId = this.snapshot.activeConnectionId;
-    const activeConnection = findConnectionById(host, activeConnectionId);
-    if (!activeConnection) {
-      await this.runProbeCycleNow();
-      if (this.snapshot.activeConnectionId) {
-        return;
-      }
-      const fallbackConnectionId = selectInitialConnectionId(host);
-      if (!fallbackConnectionId) {
-        await this.stop();
-        return;
-      }
-      await this.switchToConnection({ connectionId: fallbackConnectionId });
-    }
+    this.trackConnectionFirstSeen();
+    await this.runProbeCycleNow();
   }
 
   ensureConnected(): void {
@@ -674,9 +659,29 @@ export class HostRuntimeController {
       return;
     }
 
-    const probeByConnectionId = new Map<string, ConnectionProbeState>();
+    const now = performance.now();
+    const isOnline = this.snapshot.connectionStatus === "online";
+    const activeConnectionId = this.snapshot.activeConnectionId;
+
+    const connectionsToProbe = this.host.connections.filter((connection) => {
+      const lastProbed = this.connectionLastProbedAt.get(connection.id);
+      if (lastProbed == null) {
+        return true;
+      }
+      const firstSeen = this.connectionFirstSeenAt.get(connection.id) ?? now;
+      const isActiveOnline = isOnline && connection.id === activeConnectionId;
+      const interval = probeIntervalForConnection(firstSeen, isActiveOnline, now);
+      return now - lastProbed >= interval;
+    });
+
+    if (connectionsToProbe.length === 0) {
+      return;
+    }
+
+    const probeByConnectionId = new Map(this.snapshot.probeByConnectionId);
     await Promise.all(
-      this.host.connections.map(async (connection) => {
+      connectionsToProbe.map(async (connection) => {
+        this.connectionLastProbedAt.set(connection.id, performance.now());
         try {
           const latencyMs = await this.deps.measureLatency({
             host: this.host,
@@ -700,12 +705,12 @@ export class HostRuntimeController {
     }
     this.updateSnapshot({ probeByConnectionId });
 
-    const activeConnectionId = this.snapshot.activeConnectionId;
-    const activeProbe = activeConnectionId
-      ? probeByConnectionId.get(activeConnectionId)
+    const currentActiveConnectionId = this.snapshot.activeConnectionId;
+    const activeProbe = currentActiveConnectionId
+      ? probeByConnectionId.get(currentActiveConnectionId)
       : null;
 
-    if (!activeConnectionId || !findConnectionById(this.host, activeConnectionId)) {
+    if (!currentActiveConnectionId || !findConnectionById(this.host, currentActiveConnectionId)) {
       const nextConnectionId = selectBestConnection({
         candidates: buildConnectionCandidates(this.host),
         probeByConnectionId,
@@ -724,7 +729,7 @@ export class HostRuntimeController {
         candidates: buildConnectionCandidates(this.host),
         probeByConnectionId,
       });
-      if (nextConnectionId && nextConnectionId !== activeConnectionId) {
+      if (nextConnectionId && nextConnectionId !== currentActiveConnectionId) {
         await this.switchToConnection({
           connectionId: nextConnectionId,
           expectedProbeVersion: requestVersion,
@@ -745,7 +750,7 @@ export class HostRuntimeController {
         .sort((left, right) => left.latencyMs - right.latencyMs);
 
       const fastest = available[0] ?? null;
-      if (!fastest || fastest.connectionId === activeConnectionId) {
+      if (!fastest || fastest.connectionId === currentActiveConnectionId) {
         this.switchCandidateConnectionId = null;
         this.switchCandidateHitCount = 0;
         return;
@@ -837,6 +842,22 @@ export class HostRuntimeController {
       reasonCode,
       reason,
     });
+  }
+
+  private trackConnectionFirstSeen(): void {
+    const now = performance.now();
+    const currentIds = new Set(this.host.connections.map((c) => c.id));
+    for (const id of this.connectionFirstSeenAt.keys()) {
+      if (!currentIds.has(id)) {
+        this.connectionFirstSeenAt.delete(id);
+        this.connectionLastProbedAt.delete(id);
+      }
+    }
+    for (const connection of this.host.connections) {
+      if (!this.connectionFirstSeenAt.has(connection.id)) {
+        this.connectionFirstSeenAt.set(connection.id, now);
+      }
+    }
   }
 
   private isCurrentSwitchRequest(version: number): boolean {

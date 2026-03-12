@@ -48,7 +48,7 @@ console.log('=== CLI IPC Target Helpers ===\n')
     mkdirSync(paseoHome, { recursive: true })
     writeFileSync(
       path.join(paseoHome, 'paseo.pid'),
-      JSON.stringify({ pid: process.pid, sockPath: '/tmp/paseo-from-pid.sock' })
+      JSON.stringify({ pid: process.pid, listen: '/tmp/paseo-from-pid.sock' })
     )
     assert.deepStrictEqual(resolveDefaultDaemonHosts({ PASEO_HOME: paseoHome }), [
       'unix:///tmp/paseo-from-pid.sock',
@@ -93,7 +93,7 @@ console.log('=== CLI IPC Target Helpers ===\n')
     mkdirSync(paseoHome, { recursive: true })
     writeFileSync(
       path.join(paseoHome, 'paseo.pid'),
-      JSON.stringify({ pid: process.pid, sockPath: '/tmp/paseo-priority.sock' })
+      JSON.stringify({ pid: process.pid, listen: '/tmp/paseo-priority.sock' })
     )
     assert.deepStrictEqual(
       resolveDefaultDaemonHosts({

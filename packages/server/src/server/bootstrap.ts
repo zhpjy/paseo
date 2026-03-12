@@ -167,6 +167,8 @@ export async function createPaseoDaemon(
   rootLogger: Logger
 ): Promise<PaseoDaemon> {
   const logger = rootLogger.child({ module: "bootstrap" });
+  const bootstrapStart = performance.now();
+  const elapsed = () => `${(performance.now() - bootstrapStart).toFixed(0)}ms`;
   const daemonVersion = resolveDaemonVersion(import.meta.url);
   const pidLockMode = config.pidLock?.mode ?? "self";
   const pidLockOwnerPid = config.pidLock?.ownerPid;
@@ -177,6 +179,7 @@ export async function createPaseoDaemon(
     await acquirePidLock(config.paseoHome, config.listen, {
       ownerPid: pidLockOwnerPid,
     });
+    logger.info({ elapsed: elapsed() }, "PID lock acquired");
   }
 
   try {
@@ -328,6 +331,7 @@ export async function createPaseoDaemon(
     agentStorage
   );
   await agentStorage.initialize();
+  logger.info({ elapsed: elapsed() }, "Agent storage initialized");
   await bootstrapWorkspaceRegistries({
     paseoHome: config.paseoHome,
     agentStorage,
@@ -335,8 +339,10 @@ export async function createPaseoDaemon(
     workspaceRegistry,
     logger,
   });
+  logger.info({ elapsed: elapsed() }, "Workspace registries bootstrapped");
   const persistedRecords = await agentStorage.list();
   logger.info(
+    { elapsed: elapsed() },
     `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}); agents will initialize on demand`
   );
   logger.info(
@@ -518,6 +524,7 @@ export async function createPaseoDaemon(
     openaiConfig: config.openai,
     speechConfig: config.speech,
   });
+  logger.info({ elapsed: elapsed() }, "Speech runtime initialized");
 
   wsServer = new VoiceAssistantWebSocketServer(
     httpServer,
@@ -567,6 +574,8 @@ export async function createPaseoDaemon(
     wsServer?.publishSpeechReadiness(snapshot);
   });
 
+    logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
+
     const start = async () => {
       // Start main HTTP server
       await new Promise<void>((resolve, reject) => {
@@ -584,11 +593,11 @@ export async function createPaseoDaemon(
 
           if (listenTarget.type === "tcp") {
             logger.info(
-              { host: listenTarget.host, port: listenTarget.port },
+              { host: listenTarget.host, port: listenTarget.port, elapsed: elapsed() },
               `Server listening on http://${listenTarget.host}:${listenTarget.port}`
             );
           } else {
-            logger.info({ path: listenTarget.path }, `Server listening on ${listenTarget.path}`);
+            logger.info({ path: listenTarget.path, elapsed: elapsed() }, `Server listening on ${listenTarget.path}`);
           }
 
           if (relayEnabled) {

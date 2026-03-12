@@ -20,7 +20,7 @@ export interface LocalDaemonPidInfo {
   startedAt?: string
   hostname?: string
   uid?: number
-  sockPath?: string
+  listen?: string
 }
 
 export interface LocalDaemonState {
@@ -164,7 +164,7 @@ function readPidFile(pidPath: string): LocalDaemonPidInfo | null {
       startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : undefined,
       hostname: typeof parsed.hostname === 'string' ? parsed.hostname : undefined,
       uid: typeof parsed.uid === 'number' ? parsed.uid : undefined,
-      sockPath: typeof parsed.sockPath === 'string' ? parsed.sockPath : undefined,
+      listen: typeof parsed.listen === 'string' ? parsed.listen : typeof parsed.sockPath === 'string' ? parsed.sockPath : undefined,
     }
   } catch {
     return null
@@ -322,7 +322,7 @@ export function resolveLocalDaemonState(options: { home?: string } = {}): LocalD
   const logPath = path.join(home, DAEMON_LOG_FILENAME)
   const pidInfo = existsSync(pidPath) ? readPidFile(pidPath) : null
   const running = pidInfo ? isProcessRunning(pidInfo.pid) : false
-  const listen = pidInfo?.sockPath ?? config.listen
+  const listen = pidInfo?.listen ?? config.listen
 
   return {
     home,

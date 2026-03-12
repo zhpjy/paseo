@@ -8,7 +8,7 @@ export interface PidLockInfo {
   startedAt: string;
   hostname: string;
   uid: number;
-  sockPath: string;
+  listen: string;
 }
 
 export class PidLockError extends Error {
@@ -43,7 +43,7 @@ function resolveOwnerPid(ownerPid?: number): number {
 
 export async function acquirePidLock(
   paseoHome: string,
-  sockPath: string,
+  listen: string,
   options?: { ownerPid?: number }
 ): Promise<void> {
   const pidPath = getPidFilePath(paseoHome);
@@ -85,7 +85,7 @@ export async function acquirePidLock(
     startedAt: new Date().toISOString(),
     hostname: hostname(),
     uid: process.getuid?.() ?? 0,
-    sockPath,
+    listen,
   };
 
   let fd;
