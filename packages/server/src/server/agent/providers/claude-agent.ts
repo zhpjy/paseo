@@ -45,6 +45,7 @@ import { ClaudeSidechainTracker } from "./claude/sidechain-tracker.js";
 import type {
   AgentCapabilityFlags,
   AgentClient,
+  AgentLaunchContext,
   AgentMetadata,
   AgentMode,
   AgentModelDefinition,
@@ -291,6 +292,7 @@ type ClaudeAgentSessionOptions = {
   defaults?: { agents?: Record<string, AgentDefinition> };
   runtimeSettings?: ProviderRuntimeSettings;
   handle?: AgentPersistenceHandle;
+  launchEnv?: Record<string, string>;
   logger: Logger;
   queryFactory?: typeof query;
 };
@@ -323,6 +325,7 @@ function resolveClaudeSpawnCommand(
 function applyRuntimeSettingsToClaudeOptions(
   options: ClaudeOptions,
   runtimeSettings?: ProviderRuntimeSettings,
+  launchEnv?: Record<string, string>,
 ): ClaudeOptions {
   return {
     ...options,
@@ -335,7 +338,10 @@ function applyRuntimeSettingsToClaudeOptions(
         resolved.command === spawnOptions.command ? process.execPath : resolved.command;
       return spawn(command, resolved.args, {
         cwd: spawnOptions.cwd,
-        env: applyProviderEnv(spawnOptions.env, runtimeSettings),
+        env: {
+          ...applyProviderEnv(spawnOptions.env, runtimeSettings),
+          ...(launchEnv ?? {}),
+        },
         signal: spawnOptions.signal,
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -1103,11 +1109,15 @@ export class ClaudeAgentClient implements AgentClient {
     this.queryFactory = options.queryFactory ?? query;
   }
 
-  async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+  async createSession(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
     const claudeConfig = this.assertConfig(config);
     return new ClaudeAgentSession(claudeConfig, {
       defaults: this.defaults,
       runtimeSettings: this.runtimeSettings,
+      launchEnv: launchContext?.env,
       logger: this.logger,
       queryFactory: this.queryFactory,
     });
@@ -1116,6 +1126,7 @@ export class ClaudeAgentClient implements AgentClient {
   async resumeSession(
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     const metadata = coerceSessionMetadata(handle.metadata);
     const merged: Partial<AgentSessionConfig> = { ...metadata, ...overrides };
@@ -1128,6 +1139,7 @@ export class ClaudeAgentClient implements AgentClient {
       defaults: this.defaults,
       runtimeSettings: this.runtimeSettings,
       handle,
+      launchEnv: launchContext?.env,
       logger: this.logger,
       queryFactory: this.queryFactory,
     });
@@ -1174,7 +1186,7 @@ export class ClaudeAgentClient implements AgentClient {
     if (config.provider !== "claude") {
       throw new Error(`ClaudeAgentClient received config for provider '${config.provider}'`);
     }
-    return { ...config, provider: "claude" };
+    return { ...config, provider: "claude" } as ClaudeAgentConfig;
   }
 }
 
@@ -1183,6 +1195,7 @@ class ClaudeAgentSession implements AgentSession {
   readonly capabilities = CLAUDE_CAPABILITIES;
 
   private readonly config: ClaudeAgentConfig;
+  private readonly launchEnv?: Record<string, string>;
   private readonly defaults?: { agents?: Record<string, AgentDefinition> };
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly logger: Logger;
@@ -1222,12 +1235,15 @@ class ClaudeAgentSession implements AgentSession {
   private queryPumpPromise: Promise<void> | null = null;
   private queryRestartNeeded = false;
   private pendingInterruptAbort = false;
+  private liveEventSubscriberCount = 0;
+  private liveHistoryPollTimer: NodeJS.Timeout | null = null;
   private userMessageIds: string[] = [];
   private recentStderr = "";
   private closed = false;
 
   constructor(config: ClaudeAgentConfig, options: ClaudeAgentSessionOptions) {
     this.config = config;
+    this.launchEnv = options.launchEnv;
     this.defaults = options.defaults;
     this.runtimeSettings = options.runtimeSettings;
     this.logger = options.logger;
@@ -1452,9 +1468,18 @@ class ClaudeAgentSession implements AgentSession {
     if (this.claudeSessionId) {
       this.startQueryPump();
     }
+    this.liveEventSubscriberCount += 1;
+    this.startLiveHistoryPolling();
 
-    for await (const event of this.liveEventQueue) {
-      yield event;
+    try {
+      for await (const event of this.liveEventQueue) {
+        yield event;
+      }
+    } finally {
+      this.liveEventSubscriberCount = Math.max(0, this.liveEventSubscriberCount - 1);
+      if (this.liveEventSubscriberCount === 0) {
+        this.stopLiveHistoryPolling();
+      }
     }
   }
 
@@ -1583,7 +1608,7 @@ class ClaudeAgentSession implements AgentSession {
       provider: "claude",
       sessionId: this.claudeSessionId,
       nativeHandle: this.claudeSessionId,
-      metadata: this.config,
+      metadata: { ...this.config },
     };
     return this.persistence;
   }
@@ -1610,8 +1635,9 @@ class ClaudeAgentSession implements AgentSession {
     this.liveEventQueue.end();
     this.activeTurnPromise = null;
     this.sidechainTracker.clear();
+    this.stopLiveHistoryPolling();
     this.input?.end();
-    this.query?.close();
+    this.query?.close?.();
     await this.awaitWithTimeout(this.query?.interrupt?.(), "close query interrupt");
     await this.awaitWithTimeout(this.query?.return?.(), "close query return");
     this.query = null;
@@ -1878,7 +1904,7 @@ class ClaudeAgentSession implements AgentSession {
 
     if (this.queryRestartNeeded && this.query) {
       this.input?.end();
-      this.query.close();
+      this.query.close?.();
       try {
         await this.query.return?.();
       } catch {
@@ -1970,6 +1996,7 @@ class ClaudeAgentSession implements AgentSession {
         // Increase MCP timeouts for long-running tool calls (10 minutes)
         MCP_TIMEOUT: "600000",
         MCP_TOOL_TIMEOUT: "600000",
+        ...(this.launchEnv ?? {}),
       },
       // Required for provider-level /rewind support.
       enableFileCheckpointing: true,
@@ -1995,7 +2022,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private applyRuntimeSettings(options: ClaudeOptions): ClaudeOptions {
-    return applyRuntimeSettingsToClaudeOptions(options, this.runtimeSettings);
+    return applyRuntimeSettingsToClaudeOptions(options, this.runtimeSettings, this.launchEnv);
   }
 
   private normalizeMcpServers(
@@ -2295,7 +2322,8 @@ class ClaudeAgentSession implements AgentSession {
     const assistantishMessage =
       message.type === "assistant" ||
       message.type === "stream_event" ||
-      message.type === "tool_progress";
+      message.type === "tool_progress" ||
+      (message.type === "system" && message.subtype === "task_notification");
 
     if (!routeToForeground && assistantishMessage) {
       this.startAutonomousTurn();
@@ -2881,6 +2909,27 @@ class ClaudeAgentSession implements AgentSession {
     } catch (error) {
       // ignore history load failures
     }
+  }
+
+  private startLiveHistoryPolling(): void {
+    if (this.liveHistoryPollTimer || !this.claudeSessionId) {
+      return;
+    }
+    this.liveHistoryPollTimer = setInterval(() => {
+      if (!this.claudeSessionId || this.closed) {
+        this.stopLiveHistoryPolling();
+        return;
+      }
+      this.loadPersistedHistory(this.claudeSessionId, { dispatchLive: true });
+    }, 200);
+  }
+
+  private stopLiveHistoryPolling(): void {
+    if (!this.liveHistoryPollTimer) {
+      return;
+    }
+    clearInterval(this.liveHistoryPollTimer);
+    this.liveHistoryPollTimer = null;
   }
 
   private ingestPersistedHistoryChunk(chunk: string, options: { dispatchLive: boolean }): void {

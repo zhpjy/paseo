@@ -11,6 +11,7 @@ import { z } from "zod";
 import type {
   AgentCapabilityFlags,
   AgentClient,
+  AgentLaunchContext,
   AgentSlashCommand,
   AgentMode,
   AgentPermissionRequest,
@@ -641,10 +642,8 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     // Generate agent ID early so we can use it in MCP config
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
-    const normalizedConfig = await this.normalizeConfig(config, {
-      labels: options?.labels,
-      agentId: resolvedAgentId,
-    });
+    const normalizedConfig = await this.normalizeConfig(config);
+    const launchContext = this.buildLaunchContext(resolvedAgentId);
     const client = this.requireClient(normalizedConfig.provider);
     const available = await client.isAvailable();
     if (!available) {
@@ -652,7 +651,7 @@ export class AgentManager {
         `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
       );
     }
-    const session = await client.createSession(normalizedConfig);
+    const session = await client.createSession(normalizedConfig, launchContext);
     return this.registerSession(session, normalizedConfig, resolvedAgentId, {
       labels: options?.labels,
     });
@@ -686,8 +685,9 @@ export class AgentManager {
       normalizedConfig.model !== mergedConfig.model
         ? { ...overrides, model: normalizedConfig.model }
         : overrides;
+    const launchContext = this.buildLaunchContext(resolvedAgentId);
     const client = this.requireClient(handle.provider);
-    const session = await client.resumeSession(handle, resumeOverrides);
+    const session = await client.resumeSession(handle, resumeOverrides, launchContext);
     return this.registerSession(session, normalizedConfig, resolvedAgentId, options);
   }
 
@@ -720,10 +720,11 @@ export class AgentManager {
       provider,
     } as AgentSessionConfig;
     const normalizedConfig = await this.normalizeConfig(refreshConfig);
+    const launchContext = this.buildLaunchContext(agentId);
 
     const session = handle
-      ? await client.resumeSession(handle, normalizedConfig)
-      : await client.createSession(normalizedConfig);
+      ? await client.resumeSession(handle, normalizedConfig, launchContext)
+      : await client.createSession(normalizedConfig, launchContext);
 
     // Remove the existing agent entry before swapping sessions
     this.agents.delete(agentId);
@@ -2155,7 +2156,6 @@ export class AgentManager {
 
   private async normalizeConfig(
     config: AgentSessionConfig,
-    _options?: { labels?: Record<string, string>; agentId?: string },
   ): Promise<AgentSessionConfig> {
     const normalized: AgentSessionConfig = { ...config };
 
@@ -2189,6 +2189,14 @@ export class AgentManager {
     }
 
     return normalized;
+  }
+
+  private buildLaunchContext(agentId: string): AgentLaunchContext {
+    return {
+      env: {
+        PASEO_AGENT_ID: agentId,
+      },
+    };
   }
 
   private requireClient(provider: AgentProvider): AgentClient {

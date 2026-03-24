@@ -1,6 +1,7 @@
 import type {
   AgentCapabilityFlags,
   AgentClient,
+  AgentLaunchContext,
   AgentMode,
   AgentModelDefinition,
   McpServerConfig,
@@ -2032,7 +2033,22 @@ export async function codexAppServerTurnInputFromPrompt(
   return output;
 }
 
+function buildCodexAppServerEnv(
+  runtimeSettings?: ProviderRuntimeSettings,
+  launchEnv?: Record<string, string>,
+): Record<string, string | undefined> {
+  const env = applyProviderEnv(process.env, runtimeSettings);
+  if (!launchEnv) {
+    return env;
+  }
+  return {
+    ...env,
+    ...launchEnv,
+  };
+}
+
 export const __codexAppServerInternals = {
+  buildCodexAppServerEnv,
   mapCodexPatchNotificationToToolCall,
 };
 
@@ -3380,7 +3396,7 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly runtimeSettings?: ProviderRuntimeSettings,
   ) {}
 
-  private spawnAppServer(): ChildProcessWithoutNullStreams {
+  private spawnAppServer(launchEnv?: Record<string, string>): ChildProcessWithoutNullStreams {
     const launchPrefix = resolveCodexLaunchPrefix(this.runtimeSettings);
     this.logger.trace(
       {
@@ -3391,14 +3407,17 @@ export class CodexAppServerAgentClient implements AgentClient {
     return spawn(launchPrefix.command, [...launchPrefix.args, "app-server"], {
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
-      env: applyProviderEnv(process.env, this.runtimeSettings),
+      env: buildCodexAppServerEnv(this.runtimeSettings, launchEnv),
     });
   }
 
-  async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+  async createSession(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
     const sessionConfig: AgentSessionConfig = { ...config, provider: CODEX_PROVIDER };
     const session = new CodexAppServerAgentSession(sessionConfig, null, this.logger, () =>
-      this.spawnAppServer(),
+      this.spawnAppServer(launchContext?.env),
     );
     await session.connect();
     return session;
@@ -3407,6 +3426,7 @@ export class CodexAppServerAgentClient implements AgentClient {
   async resumeSession(
     handle: { sessionId: string; metadata?: Record<string, unknown> },
     overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     const storedConfig = (handle.metadata ?? {}) as AgentSessionConfig;
     const merged: AgentSessionConfig = {
@@ -3416,7 +3436,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
     };
     const session = new CodexAppServerAgentSession(merged, handle, this.logger, () =>
-      this.spawnAppServer(),
+      this.spawnAppServer(launchContext?.env),
     );
     await session.connect();
     return session;
