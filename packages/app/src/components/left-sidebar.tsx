@@ -811,7 +811,6 @@ const styles = StyleSheet.create((theme) => ({
   sidebarContent: {
     flex: 1,
     minHeight: 0,
-    overflow: "hidden",
   },
   desktopSidebar: {
     position: "relative",
