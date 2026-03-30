@@ -149,6 +149,119 @@ jobs:
 
           npm run build --workspace="$DESKTOP_WORKSPACE" -- --publish "$publish_mode" --mac --${{ matrix.electron_arch }} "${publish_args[@]}"
 
+      - name: Upload manifest artifact
+        if: env.IS_SMOKE_TAG != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-${{ matrix.electron_arch }}
+          path: ${{ env.DESKTOP_PACKAGE_PATH }}/release/latest-mac.yml
+          retention-days: 1
+
+  finalize-mac-manifest:
+    needs: [publish-macos]
+    if: ${{ needs.publish-macos.result == 'success' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_tag="${SOURCE_TAG}"
+          if [[ "$source_tag" =~ ^(desktop-(windows|linux|macos)-|desktop-)?v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            release_tag="v${BASH_REMATCH[3]}"
+          else
+            release_tag="$source_tag"
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+
+          if [[ "$source_tag" == *gha-smoke* ]]; then
+            echo "IS_SMOKE_TAG=true" >> "$GITHUB_ENV"
+          else
+            echo "IS_SMOKE_TAG=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download manifest artifacts
+        if: env.IS_SMOKE_TAG != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-manifest-*
+
+      - name: Merge manifests
+        if: env.IS_SMOKE_TAG != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          // Simple YAML parser for electron-builder's latest-mac.yml format
+          function parseManifest(text) {
+            const lines = text.split('\n');
+            const result = { files: [] };
+            let currentFile = null;
+
+            for (const line of lines) {
+              if (line.startsWith('version:')) result.version = line.split(': ')[1].trim();
+              else if (line.startsWith('path:')) result.path = line.split(': ')[1].trim();
+              else if (line.startsWith('sha512:') && !currentFile) result.sha512 = line.split(': ')[1].trim();
+              else if (line.startsWith('releaseDate:')) result.releaseDate = line.split(': ')[1].trim().replace(/'/g, '');
+              else if (line.trim().startsWith('- url:')) {
+                currentFile = { url: line.trim().replace('- url: ', '') };
+                result.files.push(currentFile);
+              } else if (line.trim().startsWith('sha512:') && currentFile) {
+                currentFile.sha512 = line.trim().split(': ')[1].trim();
+              } else if (line.trim().startsWith('size:') && currentFile) {
+                currentFile.size = parseInt(line.trim().split(': ')[1].trim(), 10);
+                currentFile = null;
+              }
+            }
+            return result;
+          }
+
+          function toYaml(manifest) {
+            let out = `version: ${manifest.version}\n`;
+            out += `files:\n`;
+            for (const f of manifest.files) {
+              out += `  - url: ${f.url}\n`;
+              out += `    sha512: ${f.sha512}\n`;
+              out += `    size: ${f.size}\n`;
+            }
+            out += `path: ${manifest.path}\n`;
+            out += `sha512: ${manifest.sha512}\n`;
+            out += `releaseDate: '${manifest.releaseDate}'\n`;
+            return out;
+          }
+
+          const arm64Text = fs.readFileSync('mac-manifest-arm64/latest-mac.yml', 'utf8');
+          const x64Text = fs.readFileSync('mac-manifest-x64/latest-mac.yml', 'utf8');
+
+          const arm64 = parseManifest(arm64Text);
+          const x64 = parseManifest(x64Text);
+
+          // Merge: all files from both, default path points to arm64 zip
+          const merged = {
+            version: arm64.version,
+            files: [...arm64.files, ...x64.files],
+            path: arm64.path,
+            sha512: arm64.sha512,
+            releaseDate: arm64.releaseDate || x64.releaseDate,
+          };
+
+          const output = toYaml(merged);
+          fs.writeFileSync('latest-mac.yml', output);
+          console.log('Merged manifest:\n' + output);
+          NODE
+
+      - name: Upload merged manifest to release
+        if: env.IS_SMOKE_TAG != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$RELEASE_TAG" latest-mac.yml --clobber --repo "${{ github.repository }}"
+
   publish-linux:
     if: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-linux-v'))) }}
     permissions:
