@@ -98,7 +98,7 @@ function buildConnectionFailureCopy(
   let detail: string | null = null;
 
   if (rawLower.includes("timed out")) {
-    detail = "Connection timed out. Check the host/port and your network.";
+    detail = "Connection timed out. Check the address and your network.";
   } else if (
     rawLower.includes("econnrefused") ||
     rawLower.includes("connection refused") ||
@@ -116,9 +116,9 @@ function buildConnectionFailureCopy(
   ) {
     detail = "TLS error. Check the HTTPS URL, certificate, and reverse proxy.";
   } else if (raw) {
-    detail = "Unable to connect. Check the host/port and that the daemon is reachable.";
+    detail = "Unable to connect. Check the address and that the daemon is reachable.";
   } else {
-    detail = "Unable to connect. Check the host/port and that the daemon is reachable.";
+    detail = "Unable to connect. Check the address and that the daemon is reachable.";
   }
 
   return { title, detail, raw };
@@ -253,7 +253,7 @@ export function AddHostModal({
       testID="add-host-modal"
     >
       <Text style={styles.helper}>
-        Enter the address of a Paseo server. Use `host:port` or `http(s)://host[:port]`.
+        Enter the address of a Paseo server. Use host:port or http(s)://host[:port].
       </Text>
 
       <View style={styles.field}>

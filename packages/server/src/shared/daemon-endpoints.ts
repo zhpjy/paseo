@@ -106,7 +106,11 @@ function parseDirectDaemonEndpoint(input: string): DirectDaemonEndpointParts {
     throw new Error("Host is required");
   }
 
-  if (trimmed.includes("://") && !trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+  if (
+    trimmed.includes("://") &&
+    !trimmed.startsWith("http://") &&
+    !trimmed.startsWith("https://")
+  ) {
     throw new Error("Direct endpoint URL must use http:// or https://");
   }
 
