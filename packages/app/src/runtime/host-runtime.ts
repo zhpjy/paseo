@@ -13,7 +13,11 @@ import {
   type HostConnection,
   type HostProfile,
 } from "@/types/host-connection";
-import { decodeOfferFragmentPayload, normalizeHostPort } from "@/utils/daemon-endpoints";
+import {
+  decodeOfferFragmentPayload,
+  normalizeDirectDaemonEndpoint,
+  normalizeHostPort,
+} from "@/utils/daemon-endpoints";
 import { resolveAppVersion } from "@/utils/app-version";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@server/shared/connection-offer";
 import { shouldUseDesktopDaemon, startDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
@@ -1247,7 +1251,7 @@ export class HostRuntimeStore {
     label?: string;
     existingClient?: DaemonClient;
   }): Promise<HostProfile> {
-    const endpoint = normalizeHostPort(input.endpoint);
+    const endpoint = normalizeDirectDaemonEndpoint(input.endpoint);
     return this.upsertHostConnection({
       serverId: input.serverId,
       label: input.label,

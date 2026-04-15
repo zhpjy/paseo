@@ -69,21 +69,103 @@ export function normalizeHostPort(input: string): string {
   return isIpv6 ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
+function normalizeLoopbackHost(input: { host: string; isIpv6: boolean }): string {
+  if (input.host === "127.0.0.1" || (!input.isIpv6 && input.host === "0.0.0.0")) {
+    return "localhost";
+  }
+  if (input.isIpv6 && (input.host === "::1" || input.host === "::")) {
+    return "localhost";
+  }
+  return input.host;
+}
+
+function normalizeUrlHostname(hostname: string): { host: string; isIpv6: boolean } {
+  const trimmed = hostname.trim();
+  const unwrapped =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  return { host: unwrapped, isIpv6: unwrapped.includes(":") };
+}
+
 export function normalizeLoopbackToLocalhost(endpoint: string): string {
   const { host, port, isIpv6 } = parseHostPort(endpoint);
-  if (host === "127.0.0.1" || (!isIpv6 && host === "0.0.0.0")) {
-    return `localhost:${port}`;
+  const normalizedHost = normalizeLoopbackHost({ host, isIpv6 });
+  return normalizedHost === host ? endpoint : `${normalizedHost}:${port}`;
+}
+
+type DirectDaemonEndpointParts = {
+  endpoint: string;
+  host: string;
+  port: number;
+  isIpv6: boolean;
+  secure: boolean;
+};
+
+function parseDirectDaemonEndpoint(input: string): DirectDaemonEndpointParts {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("Host is required");
   }
-  if (isIpv6 && (host === "::1" || host === "::")) {
-    return `localhost:${port}`;
+
+  if (trimmed.includes("://") && !trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    throw new Error("Direct endpoint URL must use http:// or https://");
   }
-  return endpoint;
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      throw new Error("Invalid direct endpoint URL");
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Direct endpoint URL must use http:// or https://");
+    }
+    if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
+      throw new Error("Direct endpoint URL must not include a path, query, or hash");
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error("Direct endpoint URL must not include credentials");
+    }
+
+    const { host, isIpv6 } = normalizeUrlHostname(parsed.hostname);
+    if (!host) {
+      throw new Error("Host is required");
+    }
+    const normalizedHost = normalizeLoopbackHost({ host, isIpv6 });
+    const port = parsed.port
+      ? parsePort(parsed.port, "Invalid direct endpoint URL")
+      : parsed.protocol === "https:"
+        ? 443
+        : 80;
+    const hostPart = normalizedHost.includes(":") ? `[${normalizedHost}]` : normalizedHost;
+    return {
+      endpoint: `${parsed.protocol}//${hostPart}:${port}`,
+      host: normalizedHost,
+      port,
+      isIpv6: normalizedHost.includes(":"),
+      secure: parsed.protocol === "https:",
+    };
+  }
+
+  const normalizedHostPort = normalizeLoopbackToLocalhost(normalizeHostPort(trimmed));
+  const { host, port, isIpv6 } = parseHostPort(normalizedHostPort);
+  return {
+    endpoint: normalizedHostPort,
+    host,
+    port,
+    isIpv6,
+    secure: shouldUseSecureWebSocket(port),
+  };
+}
+
+export function normalizeDirectDaemonEndpoint(input: string): string {
+  return parseDirectDaemonEndpoint(input).endpoint;
 }
 
 export function deriveLabelFromEndpoint(endpoint: string): string {
   try {
-    const { host } = parseHostPort(endpoint);
-    return host || "Unnamed Host";
+    return parseDirectDaemonEndpoint(endpoint).host || "Unnamed Host";
   } catch {
     return "Unnamed Host";
   }
@@ -94,10 +176,17 @@ function shouldUseSecureWebSocket(port: number): boolean {
 }
 
 export function buildDaemonWebSocketUrl(endpoint: string): string {
-  const { host, port, isIpv6 } = parseHostPort(endpoint);
-  const protocol = shouldUseSecureWebSocket(port) ? "wss" : "ws";
+  const { host, port, isIpv6, secure } = parseDirectDaemonEndpoint(endpoint);
+  const protocol = secure ? "wss" : "ws";
   const hostPart = isIpv6 ? `[${host}]` : host;
   return new URL(`${protocol}://${hostPart}:${port}/ws`).toString();
+}
+
+export function buildDaemonHttpUrl(endpoint: string): string {
+  const { host, port, isIpv6, secure } = parseDirectDaemonEndpoint(endpoint);
+  const protocol = secure ? "https" : "http";
+  const hostPart = isIpv6 ? `[${host}]` : host;
+  return new URL(`${protocol}://${hostPart}:${port}/`).toString();
 }
 
 export function buildRelayWebSocketUrl(params: {

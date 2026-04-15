@@ -1,9 +1,11 @@
 import { Buffer } from "buffer";
 import {
+  buildDaemonHttpUrl,
   buildDaemonWebSocketUrl,
   buildRelayWebSocketUrl as buildSharedRelayWebSocketUrl,
   deriveLabelFromEndpoint,
   extractHostPortFromWebSocketUrl,
+  normalizeDirectDaemonEndpoint,
   normalizeHostPort,
   parseHostPort,
   type HostPortParts,
@@ -12,9 +14,11 @@ import {
 export type { HostPortParts };
 
 export {
+  buildDaemonHttpUrl,
   buildDaemonWebSocketUrl,
   deriveLabelFromEndpoint,
   extractHostPortFromWebSocketUrl,
+  normalizeDirectDaemonEndpoint,
   normalizeHostPort,
   parseHostPort,
 };

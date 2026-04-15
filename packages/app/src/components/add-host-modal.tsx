@@ -5,7 +5,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { Link2 } from "lucide-react-native";
 import type { HostProfile } from "@/types/host-connection";
 import { useHosts, useHostMutations } from "@/runtime/host-runtime";
-import { normalizeHostPort } from "@/utils/daemon-endpoints";
+import { normalizeDirectDaemonEndpoint } from "@/utils/daemon-endpoints";
 import { DaemonConnectionTestError, connectToDaemon } from "@/utils/test-daemon-connection";
 import { AdaptiveModalSheet, AdaptiveTextInput } from "./adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
@@ -42,10 +42,6 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
   },
 }));
-
-function isHostPortOnly(raw: string): boolean {
-  return !raw.includes("://") && !raw.includes("/");
-}
 
 function normalizeTransportMessage(message: string | null | undefined): string | null {
   if (!message) return null;
@@ -118,8 +114,7 @@ function buildConnectionFailureCopy(
     rawLower.includes("tls") ||
     rawLower.includes("ssl")
   ) {
-    detail =
-      "TLS error. Direct connections use an unencrypted local connection. Use relay for remote access.";
+    detail = "TLS error. Check the HTTPS URL, certificate, and reverse proxy.";
   } else if (raw) {
     detail = "Unable to connect. Check the host/port and that the daemon is reachable.";
   } else {
@@ -182,16 +177,15 @@ export function AddHostModal({
       setErrorMessage("Host is required");
       return;
     }
-    if (!isHostPortOnly(raw)) {
-      setErrorMessage("Enter host:port only (no ws://, no /ws)");
-      return;
-    }
 
     let endpoint: string;
     try {
-      endpoint = normalizeHostPort(raw);
+      endpoint = normalizeDirectDaemonEndpoint(raw);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid host:port";
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Invalid endpoint. Use host:port or http(s)://host[:port].";
       setErrorMessage(message);
       return;
     }
@@ -258,7 +252,9 @@ export function AddHostModal({
       onClose={handleClose}
       testID="add-host-modal"
     >
-      <Text style={styles.helper}>Enter the address of a Paseo server.</Text>
+      <Text style={styles.helper}>
+        Enter the address of a Paseo server. Use `host:port` or `http(s)://host[:port]`.
+      </Text>
 
       <View style={styles.field}>
         <Text style={styles.label}>Host</Text>
@@ -266,7 +262,7 @@ export function AddHostModal({
           ref={hostInputRef}
           value={endpointRaw}
           onChangeText={setEndpointRaw}
-          placeholder="hostname:port"
+          placeholder="hostname:port or https://hostname:8443"
           placeholderTextColor={theme.colors.foregroundMuted}
           style={styles.input}
           autoCapitalize="none"

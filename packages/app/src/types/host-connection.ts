@@ -1,4 +1,8 @@
-import { normalizeHostPort, normalizeLoopbackToLocalhost } from "@server/shared/daemon-endpoints";
+import {
+  normalizeDirectDaemonEndpoint,
+  normalizeHostPort,
+  normalizeLoopbackToLocalhost,
+} from "@server/shared/daemon-endpoints";
 
 export type DirectTcpHostConnection = {
   id: string;
@@ -235,9 +239,7 @@ function normalizeStoredConnection(connection: unknown): HostConnection | null {
   const type = typeof record.type === "string" ? record.type : null;
   if (type === "directTcp") {
     try {
-      const endpoint = normalizeLoopbackToLocalhost(
-        normalizeHostPort(String(record.endpoint ?? "")),
-      );
+      const endpoint = normalizeDirectDaemonEndpoint(String(record.endpoint ?? ""));
       return { id: `direct:${endpoint}`, type: "directTcp", endpoint };
     } catch {
       return null;
@@ -312,7 +314,7 @@ export function normalizeStoredHostProfile(entry: unknown): HostProfile | null {
 
 export function normalizeEndpointOrNull(endpoint: string): string | null {
   try {
-    return normalizeHostPort(endpoint);
+    return normalizeDirectDaemonEndpoint(endpoint);
   } catch {
     return null;
   }
