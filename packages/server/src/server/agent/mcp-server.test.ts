@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { createAgentMcpServer } from "./mcp-server.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
-import type { AgentStorage } from "./agent-storage.js";
+import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
 import type { ProviderDefinition } from "./provider-registry.js";
 
 type TestDeps = {
@@ -29,10 +29,17 @@ function createTestDeps(): TestDeps {
     archiveAgent: vi.fn().mockResolvedValue({ archivedAt: new Date().toISOString() }),
     notifyAgentState: vi.fn(),
     getAgent: vi.fn(),
+    listAgents: vi.fn().mockReturnValue([]),
+    getTimeline: vi.fn().mockReturnValue([]),
+    resumeAgentFromPersistence: vi.fn(),
+    hydrateTimelineFromProvider: vi.fn().mockResolvedValue(undefined),
+    hasInFlightRun: vi.fn().mockReturnValue(false),
+    subscribe: vi.fn().mockReturnValue(() => {}),
     streamAgent: vi.fn(() => (async function* noop() {})()),
     respondToPermission: vi.fn(),
     cancelAgentRun: vi.fn(),
     getPendingPermissions: vi.fn(),
+    getRegisteredProviderIds: vi.fn().mockReturnValue(["claude"]),
   };
 
   const agentStorageSpies = {
@@ -40,7 +47,7 @@ function createTestDeps(): TestDeps {
     setTitle: vi.fn().mockResolvedValue(undefined),
     upsert: vi.fn().mockResolvedValue(undefined),
     applySnapshot: vi.fn(),
-    list: vi.fn(),
+    list: vi.fn().mockResolvedValue([]),
     remove: vi.fn(),
   };
 
@@ -64,6 +71,43 @@ function createProviderDefinition(overrides: Partial<ProviderDefinition>): Provi
     createClient: vi.fn() as ProviderDefinition["createClient"],
     fetchModels: vi.fn().mockResolvedValue([]),
     fetchModes: vi.fn().mockResolvedValue([]),
+    ...overrides,
+  };
+}
+
+function createStoredRecord(overrides: Partial<StoredAgentRecord> = {}): StoredAgentRecord {
+  const now = "2026-04-11T00:00:00.000Z";
+  return {
+    id: "stored-agent",
+    provider: "claude",
+    cwd: "/tmp/stored-project",
+    createdAt: now,
+    updatedAt: now,
+    lastActivityAt: now,
+    lastUserMessageAt: null,
+    title: "Stored agent",
+    labels: {},
+    lastStatus: "closed",
+    lastModeId: "default",
+    config: {
+      modeId: "default",
+      model: "claude-sonnet-4-20250514",
+    },
+    runtimeInfo: {
+      provider: "claude",
+      sessionId: "session-123",
+      model: "claude-sonnet-4-20250514",
+    },
+    features: [],
+    persistence: {
+      provider: "claude",
+      sessionId: "session-123",
+    },
+    requiresAttention: false,
+    attentionReason: null,
+    attentionTimestamp: null,
+    internal: false,
+    archivedAt: "2026-04-12T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -482,5 +526,224 @@ describe("agent snapshot MCP serialization", () => {
       ],
     });
     expect(Array.isArray(structured.agents[0].features)).toBe(true);
+  });
+
+  it("returns archived agent snapshots from storage for get_agent_status", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const record = createStoredRecord({
+      id: "archived-agent",
+      archivedAt: "2026-04-12T00:00:00.000Z",
+    });
+    spies.agentManager.getAgent.mockReturnValue(null);
+    spies.agentStorage.get.mockResolvedValue(record);
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["get_agent_status"];
+    const response = await tool.callback({ agentId: "archived-agent" });
+
+    expect(response.structuredContent).toEqual({
+      status: "closed",
+      snapshot: expect.objectContaining({
+        id: "archived-agent",
+        archivedAt: "2026-04-12T00:00:00.000Z",
+        title: "Stored agent",
+        status: "closed",
+      }),
+    });
+    expect(spies.agentStorage.get).toHaveBeenCalledWith("archived-agent");
+  });
+
+  it("does not expose internal stored agents from get_agent_status", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue(null);
+    spies.agentStorage.get.mockResolvedValue(
+      createStoredRecord({
+        id: "internal-agent",
+        internal: true,
+      }),
+    );
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["get_agent_status"];
+
+    await expect(tool.callback({ agentId: "internal-agent" })).rejects.toThrow(
+      "Agent internal-agent not found",
+    );
+  });
+
+  it("includes stored non-archived agents in list_agents by default", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const liveAgent = {
+      id: "live-agent",
+      provider: "claude",
+      cwd: "/tmp/live-project",
+      config: {},
+      runtimeInfo: undefined,
+      createdAt: new Date("2026-04-11T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-11T00:00:00.000Z"),
+      lastUserMessageAt: null,
+      lifecycle: "idle",
+      capabilities: {
+        supportsStreaming: false,
+        supportsSessionPersistence: false,
+        supportsDynamicModes: false,
+        supportsMcpServers: true,
+        supportsReasoningStream: false,
+        supportsToolInvocations: true,
+      },
+      currentModeId: null,
+      availableModes: [],
+      features: [],
+      pendingPermissions: new Map(),
+      persistence: null,
+      labels: {},
+      attention: { requiresAttention: false },
+    } as unknown as ManagedAgent;
+    spies.agentManager.listAgents.mockReturnValue([liveAgent]);
+    spies.agentStorage.list.mockResolvedValue([
+      createStoredRecord({ id: "closed-agent", archivedAt: null }),
+      createStoredRecord({ id: "archived-agent", archivedAt: "2026-04-12T00:00:00.000Z" }),
+      createStoredRecord({ id: "live-agent", archivedAt: null }),
+      createStoredRecord({ id: "internal-agent", archivedAt: null, internal: true }),
+    ]);
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["list_agents"];
+    const response = await tool.callback({});
+
+    expect(response.structuredContent.agents).toEqual([
+      expect.objectContaining({ id: "live-agent" }),
+      expect.objectContaining({ id: "closed-agent", archivedAt: null }),
+    ]);
+  });
+
+  it("includes archived stored agents in list_agents when requested", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const liveAgent = {
+      id: "live-agent",
+      provider: "claude",
+      cwd: "/tmp/live-project",
+      config: {},
+      runtimeInfo: undefined,
+      createdAt: new Date("2026-04-11T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-11T00:00:00.000Z"),
+      lastUserMessageAt: null,
+      lifecycle: "idle",
+      capabilities: {
+        supportsStreaming: false,
+        supportsSessionPersistence: false,
+        supportsDynamicModes: false,
+        supportsMcpServers: true,
+        supportsReasoningStream: false,
+        supportsToolInvocations: true,
+      },
+      currentModeId: null,
+      availableModes: [],
+      features: [],
+      pendingPermissions: new Map(),
+      persistence: null,
+      labels: {},
+      attention: { requiresAttention: false },
+    } as unknown as ManagedAgent;
+    spies.agentManager.listAgents.mockReturnValue([liveAgent]);
+    spies.agentStorage.list.mockResolvedValue([
+      createStoredRecord({ id: "archived-agent", archivedAt: "2026-04-12T00:00:00.000Z" }),
+      createStoredRecord({ id: "live-agent", archivedAt: "2026-04-12T00:00:00.000Z" }),
+      createStoredRecord({
+        id: "internal-archived-agent",
+        archivedAt: "2026-04-12T00:00:00.000Z",
+        internal: true,
+      }),
+      createStoredRecord({ id: "not-archived-agent", archivedAt: null }),
+    ]);
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["list_agents"];
+    const response = await tool.callback({ includeArchived: true });
+
+    expect(response.structuredContent.agents).toEqual([
+      expect.objectContaining({ id: "live-agent" }),
+      expect.objectContaining({
+        id: "archived-agent",
+        archivedAt: "2026-04-12T00:00:00.000Z",
+      }),
+      expect.objectContaining({
+        id: "not-archived-agent",
+        archivedAt: null,
+      }),
+    ]);
+  });
+
+  it("loads archived agents before reading get_agent_activity", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const record = createStoredRecord({ id: "archived-activity-agent" });
+    const snapshot = {
+      id: "archived-activity-agent",
+      currentModeId: "default",
+    } as ManagedAgent;
+    spies.agentManager.getAgent
+      .mockReturnValueOnce(null)
+      .mockReturnValue(snapshot)
+      .mockReturnValue(snapshot);
+    spies.agentStorage.get.mockResolvedValue(record);
+    spies.agentManager.resumeAgentFromPersistence.mockResolvedValue(snapshot);
+    spies.agentManager.getTimeline.mockReturnValue([
+      {
+        kind: "status",
+        timestamp: "2026-04-11T00:00:00.000Z",
+        text: "Agent resumed",
+      },
+    ]);
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["get_agent_activity"];
+    const response = await tool.callback({ agentId: "archived-activity-agent" });
+
+    expect(response.structuredContent).toEqual(
+      expect.objectContaining({
+        agentId: "archived-activity-agent",
+        updateCount: 1,
+        currentModeId: "default",
+      }),
+    );
+    expect(spies.agentManager.resumeAgentFromPersistence).toHaveBeenCalled();
+    expect(spies.agentManager.hydrateTimelineFromProvider).toHaveBeenCalledWith(
+      "archived-activity-agent",
+    );
   });
 });

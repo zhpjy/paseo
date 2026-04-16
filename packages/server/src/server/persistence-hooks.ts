@@ -1,12 +1,19 @@
 import type { AgentManager } from "./agent/agent-manager.js";
-import type { AgentProvider, AgentSessionConfig } from "./agent/agent-sdk-types.js";
+import type {
+  AgentPersistenceHandle,
+  AgentProvider,
+  AgentSessionConfig,
+} from "./agent/agent-sdk-types.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
+import { buildProviderRegistry } from "./agent/provider-registry.js";
 
 type LoggerLike = {
   child(bindings: Record<string, unknown>): LoggerLike;
   error(...args: any[]): void;
   warn(...args: any[]): void;
 };
+
+const DEFAULT_AGENT_PROVIDER = "claude";
 
 function getLogger(logger: LoggerLike): LoggerLike {
   return logger.child({ module: "persistence" });
@@ -19,6 +26,18 @@ type BuildSessionConfigOptions = {
   validProviders?: Iterable<AgentProvider>;
   logger?: LoggerLike;
 };
+
+type RegisteredProviders = ReturnType<typeof buildProviderRegistry> | Iterable<AgentProvider>;
+
+function isProviderRegistry(
+  registeredProviders: RegisteredProviders,
+): registeredProviders is ReturnType<typeof buildProviderRegistry> {
+  return (
+    typeof registeredProviders === "object" &&
+    registeredProviders !== null &&
+    !(Symbol.iterator in registeredProviders)
+  );
+}
 
 /**
  * Attach AgentStorage persistence to an AgentManager instance so every
@@ -96,4 +115,59 @@ export function extractTimestamps(record: StoredAgentRecord): {
     lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
     labels: record.labels,
   };
+}
+
+function hasRegisteredProvider(registeredProviders: RegisteredProviders, value: string): boolean {
+  if (isProviderRegistry(registeredProviders)) {
+    return Object.prototype.hasOwnProperty.call(registeredProviders, value);
+  }
+  return new Set(registeredProviders).has(value as AgentProvider);
+}
+
+export function isRegisteredProvider(
+  providerRegistry: ReturnType<typeof buildProviderRegistry>,
+  value: string,
+): boolean {
+  return hasRegisteredProvider(providerRegistry, value);
+}
+
+export function coerceAgentProvider(
+  logger: LoggerLike,
+  providerRegistry: ReturnType<typeof buildProviderRegistry>,
+  value: string,
+  agentId?: string,
+): AgentProvider {
+  if (isRegisteredProvider(providerRegistry, value)) {
+    return value;
+  }
+  logger.warn(
+    { value, agentId, defaultProvider: DEFAULT_AGENT_PROVIDER },
+    `Unknown provider '${value}' for agent ${agentId ?? "unknown"}; defaulting to '${DEFAULT_AGENT_PROVIDER}'`,
+  );
+  return DEFAULT_AGENT_PROVIDER;
+}
+
+export function toAgentPersistenceHandle(
+  logger: LoggerLike,
+  registeredProviders: RegisteredProviders,
+  handle: StoredAgentRecord["persistence"],
+): AgentPersistenceHandle | null {
+  if (!handle) {
+    return null;
+  }
+  const provider = handle.provider;
+  if (!hasRegisteredProvider(registeredProviders, provider)) {
+    logger.warn({ provider }, `Ignoring persistence handle with unknown provider '${provider}'`);
+    return null;
+  }
+  if (!handle.sessionId) {
+    logger.warn("Ignoring persistence handle missing sessionId");
+    return null;
+  }
+  return {
+    provider,
+    sessionId: handle.sessionId,
+    nativeHandle: handle.nativeHandle,
+    metadata: handle.metadata,
+  } satisfies AgentPersistenceHandle;
 }

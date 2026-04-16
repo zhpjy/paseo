@@ -187,18 +187,19 @@ export function startAgentRun(
 
 interface SetupFinishNotificationParams {
   agentManager: AgentManager;
+  agentStorage: AgentStorage;
   childAgentId: string;
   callerAgentId: string;
   logger: Logger;
 }
 
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
-  const { agentManager, childAgentId, callerAgentId, logger } = params;
+  const { agentManager, agentStorage, childAgentId, callerAgentId, logger } = params;
   let hasSeenRunning = false;
   let fired = false;
   let unsubscribe: (() => void) | null = null;
 
-  function notify(reason: "finished" | "errored" | "needs permission"): void {
+  async function notify(reason: "finished" | "errored" | "needs permission"): Promise<void> {
     if (fired) {
       return;
     }
@@ -206,6 +207,11 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     unsubscribe?.();
 
     if (!agentManager.getAgent(callerAgentId)) {
+      return;
+    }
+
+    const callerRecord = await agentStorage.get(callerAgentId);
+    if (callerRecord?.archivedAt) {
       return;
     }
 
