@@ -3,7 +3,7 @@ import { File as FSFile, Paths } from "expo-file-system";
 import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import type { HostProfile } from "@/types/host-connection";
-import { buildDaemonWebSocketUrl } from "@/utils/daemon-endpoints";
+import { buildDaemonHttpUrl } from "@/utils/daemon-endpoints";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isWeb } from "@/constants/platform";
 
@@ -250,15 +250,9 @@ function resolveDaemonDownloadTarget(daemon?: HostProfile): DownloadTarget {
 
   let parsed: URL;
   try {
-    parsed = new URL(buildDaemonWebSocketUrl(endpoint));
+    parsed = new URL(buildDaemonHttpUrl(endpoint));
   } catch {
     return { baseUrl: null, authHeader: null, authCredentials: null };
-  }
-
-  if (parsed.protocol === "ws:") {
-    parsed.protocol = "http:";
-  } else if (parsed.protocol === "wss:") {
-    parsed.protocol = "https:";
   }
 
   let authCredentials: { username: string; password: string } | null = null;

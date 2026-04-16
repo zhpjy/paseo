@@ -88,6 +88,19 @@ describe("test-daemon-connection connectToDaemon", () => {
     expect(clientIdMock.getOrCreateClientId).toHaveBeenCalledTimes(2);
   });
 
+  it("uses wss for explicit https direct endpoints", async () => {
+    const mod = await import("./test-daemon-connection");
+
+    const result = await mod.connectToDaemon({
+      id: "direct:https://daemon.example.com:8443",
+      type: "directTcp",
+      endpoint: "https://daemon.example.com:8443",
+    });
+    await result.client.close();
+
+    expect(daemonClientMock.createdConfigs[0]?.url).toBe("wss://daemon.example.com:8443/ws");
+  });
+
   it("encodes the local socket target into the client config", async () => {
     const mod = await import("./test-daemon-connection");
 
