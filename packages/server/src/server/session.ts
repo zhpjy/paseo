@@ -65,6 +65,7 @@ import {
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
+import { sendPromptToAgent, unarchiveAgentState } from "./agent/mcp-shared.js";
 import { experimental_createMCPClient } from "ai";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
@@ -2188,21 +2189,6 @@ export class Session {
     });
   }
 
-  private async unarchiveAgentState(agentId: string): Promise<boolean> {
-    const record = await this.agentStorage.get(agentId);
-    if (!record || !record.archivedAt) {
-      return false;
-    }
-    const updatedAt = new Date().toISOString();
-    await this.agentStorage.upsert({
-      ...record,
-      archivedAt: null,
-      updatedAt,
-    });
-    this.agentManager.notifyAgentState(agentId);
-    return true;
-  }
-
   private async unarchiveAgentByHandle(handle: AgentPersistenceHandle): Promise<void> {
     const records = await this.agentStorage.list();
     const matched = records.find(
@@ -2213,7 +2199,7 @@ export class Session {
     if (!matched) {
       return;
     }
-    await this.unarchiveAgentState(matched.id);
+    await unarchiveAgentState(this.agentStorage, this.agentManager, matched.id);
   }
 
   private async handleUpdateAgentRequest(
@@ -2711,38 +2697,28 @@ export class Session {
       `Sending text to agent ${agentId}${images && images.length > 0 ? ` with ${images.length} image attachment(s)` : ""}`,
     );
 
-    await this.unarchiveAgentState(agentId);
+    const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
+    const prompt = this.buildAgentPrompt(promptText, images);
 
     try {
-      await ensureAgentLoaded(agentId, {
+      await sendPromptToAgent({
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
+        agentId,
+        userMessageText: text,
+        prompt,
+        messageId,
+        runOptions,
         logger: this.sessionLogger,
       });
+      return { ok: true };
     } catch (error) {
-      this.handleAgentRunError(agentId, error, "Failed to initialize agent before sending prompt");
+      this.handleAgentRunError(agentId, error, "Failed to send agent message");
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       };
     }
-
-    try {
-      this.agentManager.recordUserMessage(agentId, text, {
-        messageId,
-        emitState: false,
-      });
-    } catch (error) {
-      this.sessionLogger.error(
-        { err: error, agentId },
-        `Failed to record user message for agent ${agentId}`,
-      );
-    }
-
-    const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
-    const prompt = this.buildAgentPrompt(promptText, images);
-
-    return this.startAgentStream(agentId, prompt, runOptions);
   }
 
   /**
@@ -2902,7 +2878,7 @@ export class Session {
     try {
       await this.unarchiveAgentByHandle(handle);
       const snapshot = await this.agentManager.resumeAgentFromPersistence(handle, overrides);
-      await this.unarchiveAgentState(snapshot.id);
+      await unarchiveAgentState(this.agentStorage, this.agentManager, snapshot.id);
       await this.agentManager.hydrateTimelineFromProvider(snapshot.id);
       await this.forwardAgentUpdate(snapshot);
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
@@ -2943,7 +2919,7 @@ export class Session {
     this.sessionLogger.info({ agentId }, `Refreshing agent ${agentId} from persistence`);
 
     try {
-      await this.unarchiveAgentState(agentId);
+      await unarchiveAgentState(this.agentStorage, this.agentManager, agentId);
       let snapshot: ManagedAgent;
       const existing = this.agentManager.getAgent(agentId);
       if (existing) {
@@ -3218,7 +3194,10 @@ export class Session {
   private async handleRefreshProvidersSnapshotRequest(
     msg: Extract<SessionInboundMessage, { type: "refresh_providers_snapshot_request" }>,
   ): Promise<void> {
-    this.providerSnapshotManager?.refresh(msg.cwd ? expandTilde(msg.cwd) : undefined);
+    await this.providerSnapshotManager?.refresh({
+      cwd: msg.cwd ? expandTilde(msg.cwd) : undefined,
+      providers: msg.providers,
+    });
     this.emit({
       type: "refresh_providers_snapshot_response",
       payload: {
@@ -6393,44 +6372,32 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
-      await this.unarchiveAgentState(agentId);
-
-      await ensureAgentLoaded(agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-
-      this.sessionLogger.trace(
-        { agentId, messageId: msg.messageId, textPrefix: msg.text.slice(0, 80) },
-        "send_agent_message_request: recording user message",
-      );
-      try {
-        this.agentManager.recordUserMessage(agentId, msg.text, {
-          messageId: msg.messageId,
-          emitState: false,
-        });
-      } catch (error) {
-        this.sessionLogger.error(
-          { err: error, agentId },
-          "Failed to record user message for send_agent_message_request",
-        );
-      }
 
       const prompt = this.buildAgentPrompt(msg.text, msg.images);
       this.sessionLogger.trace(
-        { agentId, messageId: msg.messageId },
-        "send_agent_message_request: starting agent stream",
+        { agentId, messageId: msg.messageId, textPrefix: msg.text.slice(0, 80) },
+        "send_agent_message_request: dispatching shared sendPromptToAgent",
       );
-      const started = this.startAgentStream(agentId, prompt);
-      if (!started.ok) {
+      try {
+        await sendPromptToAgent({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          agentId,
+          userMessageText: msg.text,
+          prompt,
+          messageId: msg.messageId,
+          logger: this.sessionLogger,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.handleAgentRunError(agentId, error, "Failed to send agent message");
         this.emit({
           type: "send_agent_message_response",
           payload: {
             requestId: msg.requestId,
             agentId,
             accepted: false,
-            error: started.error,
+            error: message,
           },
         });
         return;

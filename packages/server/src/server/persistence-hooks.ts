@@ -167,7 +167,7 @@ export function toAgentPersistenceHandle(
   return {
     provider,
     sessionId: handle.sessionId,
-    nativeHandle: handle.nativeHandle,
-    metadata: handle.metadata,
+    ...(handle.nativeHandle !== undefined ? { nativeHandle: handle.nativeHandle } : {}),
+    ...(handle.metadata !== undefined ? { metadata: handle.metadata } : {}),
   } satisfies AgentPersistenceHandle;
 }

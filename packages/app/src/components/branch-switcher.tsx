@@ -45,7 +45,7 @@ export function BranchSwitcher({
 
   const titleContent = (
     <>
-      <GitBranch size={14} color={theme.colors.foregroundMuted} />
+      {isGitCheckout ? <GitBranch size={14} color={theme.colors.foregroundMuted} /> : null}
       <Text testID="workspace-header-title" style={styles.headerTitle} numberOfLines={1}>
         {title}
       </Text>

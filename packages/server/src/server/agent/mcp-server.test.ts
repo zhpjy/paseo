@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { createAgentMcpServer } from "./mcp-server.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
 import type { ProviderDefinition } from "./provider-registry.js";
+import { AgentSnapshotPayloadSchema } from "../../shared/messages.js";
 
 type TestDeps = {
   agentManager: AgentManager;
@@ -700,6 +702,59 @@ describe("agent snapshot MCP serialization", () => {
         archivedAt: null,
       }),
     ]);
+  });
+
+  it("emits list_agents payloads that satisfy the declared output schema", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const liveAgent = {
+      id: "live-agent",
+      provider: "claude",
+      cwd: "/tmp/live-project",
+      config: {},
+      runtimeInfo: undefined,
+      createdAt: new Date("2026-04-11T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-11T00:00:00.000Z"),
+      lastUserMessageAt: null,
+      lifecycle: "idle",
+      capabilities: {
+        supportsStreaming: false,
+        supportsSessionPersistence: false,
+        supportsDynamicModes: false,
+        supportsMcpServers: true,
+        supportsReasoningStream: false,
+        supportsToolInvocations: true,
+      },
+      currentModeId: null,
+      availableModes: [],
+      features: [],
+      pendingPermissions: new Map(),
+      persistence: null,
+      labels: {},
+      attention: { requiresAttention: false },
+    } as unknown as ManagedAgent;
+    spies.agentManager.listAgents.mockReturnValue([liveAgent]);
+    spies.agentStorage.list.mockResolvedValue([
+      createStoredRecord({ id: "stored-non-archived", archivedAt: null }),
+      createStoredRecord({ id: "stored-archived", archivedAt: "2026-04-12T00:00:00.000Z" }),
+    ]);
+
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      logger,
+      providerRegistry: {
+        claude: createProviderDefinition({}),
+      } as any,
+    });
+    const tool = (server as any)._registeredTools["list_agents"];
+    const response = await tool.callback({ includeArchived: true });
+
+    const parsed = z.array(AgentSnapshotPayloadSchema).safeParse(response.structuredContent.agents);
+    if (!parsed.success) {
+      throw new Error(
+        `list_agents response failed AgentSnapshotPayloadSchema: ${JSON.stringify(parsed.error.issues, null, 2)}`,
+      );
+    }
   });
 
   it("loads archived agents before reading get_agent_activity", async () => {

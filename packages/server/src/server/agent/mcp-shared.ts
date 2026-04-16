@@ -1,10 +1,15 @@
 import { z } from "zod";
 import type { Logger } from "pino";
 
-import type { AgentPromptInput, AgentPermissionRequest } from "./agent-sdk-types.js";
+import type {
+  AgentPromptInput,
+  AgentPermissionRequest,
+  AgentRunOptions,
+} from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent, WaitForAgentResult } from "./agent-manager.js";
 import { curateAgentActivity } from "./activity-curator.js";
 import type { AgentStorage } from "./agent-storage.js";
+import { ensureAgentLoaded } from "./agent-loading.js";
 import { serializeAgentSnapshot } from "../messages.js";
 import { StoredScheduleSchema } from "../schedule/types.js";
 import type { AgentProvider } from "./agent-sdk-types.js";
@@ -94,6 +99,7 @@ export function resolveProviderAndModel(params: {
 
 export type StartAgentRunOptions = {
   replaceRunning?: boolean;
+  runOptions?: AgentRunOptions;
 };
 
 /**
@@ -171,9 +177,10 @@ export function startAgentRun(
   options?: StartAgentRunOptions,
 ): void {
   const shouldReplace = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
+  const runOptions = options?.runOptions;
   const iterator = shouldReplace
-    ? agentManager.replaceAgentRun(agentId, prompt)
-    : agentManager.streamAgent(agentId, prompt);
+    ? agentManager.replaceAgentRun(agentId, prompt, runOptions)
+    : agentManager.streamAgent(agentId, prompt, runOptions);
   void (async () => {
     try {
       for await (const _ of iterator) {
@@ -183,6 +190,92 @@ export function startAgentRun(
       logger.error({ err: error, agentId }, "Agent stream failed");
     }
   })();
+}
+
+/**
+ * Clear the archived flag from a stored agent record.
+ * Shared across Session (app/WS), MCP, and CLI so every surface that acts on
+ * an archived agent unarchives it the same way.
+ */
+export async function unarchiveAgentState(
+  agentStorage: AgentStorage,
+  agentManager: AgentManager,
+  agentId: string,
+): Promise<boolean> {
+  const record = await agentStorage.get(agentId);
+  if (!record || !record.archivedAt) {
+    return false;
+  }
+  const updatedAt = new Date().toISOString();
+  await agentStorage.upsert({
+    ...record,
+    archivedAt: null,
+    updatedAt,
+  });
+  agentManager.notifyAgentState(agentId);
+  return true;
+}
+
+export interface SendPromptToAgentParams {
+  agentManager: AgentManager;
+  agentStorage: AgentStorage;
+  agentId: string;
+  /** Raw user text to record in the timeline. */
+  userMessageText: string;
+  /** Prompt to dispatch to the provider (may include image blocks or wrapped text). */
+  prompt: AgentPromptInput;
+  messageId?: string;
+  runOptions?: AgentRunOptions;
+  /** Optional mode to set on the agent before the run starts. */
+  sessionMode?: string;
+  logger: Logger;
+}
+
+/**
+ * Full send-prompt orchestration: unarchive → load → (optional mode change) →
+ * record user message → start run.
+ *
+ * Every surface that sends a prompt to an agent (Session/WS, MCP, CLI-through-MCP)
+ * MUST go through this so behavior can never drift between them.
+ */
+export async function sendPromptToAgent(params: SendPromptToAgentParams): Promise<void> {
+  const {
+    agentManager,
+    agentStorage,
+    agentId,
+    userMessageText,
+    prompt,
+    messageId,
+    runOptions,
+    sessionMode,
+    logger,
+  } = params;
+
+  await unarchiveAgentState(agentStorage, agentManager, agentId);
+
+  await ensureAgentLoaded(agentId, {
+    agentManager,
+    agentStorage,
+    logger,
+  });
+
+  if (sessionMode) {
+    await agentManager.setAgentMode(agentId, sessionMode);
+  }
+
+  try {
+    agentManager.recordUserMessage(agentId, userMessageText, {
+      messageId,
+      emitState: false,
+    });
+  } catch (error) {
+    logger.error({ err: error, agentId }, "Failed to record user message");
+  }
+
+  startAgentRun(agentManager, agentId, prompt, logger, {
+    replaceRunning: true,
+    runOptions,
+  });
 }
 
 interface SetupFinishNotificationParams {

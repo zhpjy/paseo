@@ -40,6 +40,7 @@ import {
   parseDurationString,
   resolveProviderAndModel,
   sanitizePermissionRequest,
+  sendPromptToAgent,
   setupFinishNotification,
   serializeSnapshotWithMetadata,
   startAgentRun,
@@ -768,30 +769,20 @@ export async function createAgentMcpServer(options: AgentMcpServerOptions): Prom
       },
     },
     async ({ agentId, prompt, sessionMode, background = false, notifyOnFinish = false }) => {
-      const snapshot = agentManager.getAgent(agentId);
-      if (!snapshot) {
-        throw new Error(`Agent ${agentId} not found`);
-      }
-
       if (agentManager.hasInFlightRun(agentId)) {
         waitTracker.cancel(agentId, "Agent run interrupted by new prompt");
       }
 
-      if (sessionMode) {
-        await agentManager.setAgentMode(agentId, sessionMode);
-      }
-
-      try {
-        agentManager.recordUserMessage(agentId, prompt, {
-          emitState: false,
-        });
-      } catch (error) {
-        childLogger.error({ err: error, agentId }, "Failed to record user message");
-      }
-
-      startAgentRun(agentManager, agentId, prompt, childLogger, {
-        replaceRunning: true,
+      await sendPromptToAgent({
+        agentManager,
+        agentStorage,
+        agentId,
+        userMessageText: prompt,
+        prompt,
+        sessionMode,
+        logger: childLogger,
       });
+
       if (notifyOnFinish && callerAgentId) {
         setupFinishNotification({
           agentManager,
