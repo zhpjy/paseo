@@ -2,11 +2,16 @@
 
 # Build from the repository root:
 # docker build -f packages/app/Dockerfile -t paseo-web .
+# docker build -f packages/app/Dockerfile \
+#   --build-arg EXPO_PUBLIC_LOCAL_DAEMON=https://you.daemon \
+#   -t paseo-web .
 
 FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 ENV CI=1
+ARG EXPO_PUBLIC_LOCAL_DAEMON=localhost:6767
+ENV EXPO_PUBLIC_LOCAL_DAEMON=${EXPO_PUBLIC_LOCAL_DAEMON}
 
 # Copy manifests first to keep dependency installation cacheable.
 COPY package.json package-lock.json ./
